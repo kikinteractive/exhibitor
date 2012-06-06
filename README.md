@@ -1,22 +1,12 @@
 ## DESCRIPTION
 Exhibitor is a supervisor system for ZooKeeper.
 
+Kik extended exhibitor to provide an interface for configuring our servers.
+It requires metadata that only private code produces, but we're hoping to release the configuration + metadata extraction code soon too.
+
 ## DETAILS
 
 Please see the doc at https://github.com/Netflix/exhibitor/wiki
-
-## BUILDING
-
-Exhibitor is built via Gradle (http://www.gradle.org). To build from the command line:
-    ./gradlew build
-
-## ARTIFACTS
-
-Exhibitor binaries are published to Maven Central. Please see the docs for details.
-
-## MAILING LIST
-
-There is an Exhibitor mailing list. Subscribe here: https://listserv.netflix.com/mailman/listinfo/exhibitor-users
 
 ## AUTHOR
 
