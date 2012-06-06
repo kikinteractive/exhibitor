@@ -1,9 +1,7 @@
 $(function() {
-	// Stop the NetFlix eye bleed.
 	$('head').append('<link rel="stylesheet" href="kik/css/kik.css">');
 
 	var kik_tab_id = 'tabs-kik-config';
-
 	var kikConfigData;
 
 	function addKikConfigTab() {
@@ -35,7 +33,7 @@ $(function() {
 		sb.push('</div>');
 
 		$('#tabs').append(sb.join(''));
-		$('#tabs-list').append('<li><a href="#' + kik_tab_id + '">' + 'KikConfig' + '</a></li>');
+		$('#tabs-list').append('<li><a href="#' + kik_tab_id + '">KikConfig</a></li>');
 	}
 
 	function fetchKikConfig() {
@@ -43,7 +41,6 @@ $(function() {
 		var type = $("#configType").val();
 
 		var zkPath = '/' + env + '/config/' + type + '/meta';
-		console.log(zkPath);
 		$.ajax({
 			url : URL_EXPLORER_NODE_DATA,
 			data : {
@@ -203,7 +200,6 @@ $(function() {
 				}
 			});
 		});
-
 	}
 
 	function fillKikConfigValue(k) {
@@ -272,5 +268,4 @@ $(function() {
 	fetchKikConfig();
 	$("#configEnv").change(fetchKikConfig);
 	$("#configType").change(fetchKikConfig);
-
 });
