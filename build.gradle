@@ -163,6 +163,16 @@ project(':exhibitor-standalone') {
         compile 'commons-cli:commons-cli:1.2'
         compile 'com.amazonaws:aws-java-sdk:1.3.2'
     }
+
+    jar {
+        from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+        manifest {
+            attributes (
+                'Main-Class': 'com.netflix.exhibitor.application.ExhibitorMain',
+                'Implementation-Version': project.version
+            )
+        }
+    }
 }
 
 // Generate wrapper, which is distributed as part of source to alleviate the need of installing gradle
