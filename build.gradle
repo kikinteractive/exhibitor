@@ -24,14 +24,10 @@ subprojects {
 
     repositories {
         mavenCentral()
-        maven {
-            url "https://repository.jboss.org/nexus/content/groups/public/"
-        }
+        maven { url "https://repository.jboss.org/nexus/content/groups/public/" }
     }
 
-    dependencies {
-        testCompile 'org.testng:testng:6.1.1'
-    }
+    dependencies { testCompile 'org.testng:testng:6.1.1' }
 
     task sourcesJar(type: Jar, dependsOn:classes) {
         classifier = 'sources'
@@ -52,9 +48,9 @@ subprojects {
     jar {
         manifest {
             attributes(
-                "Implementation-Version": version,
-                "Implementation-Title": project.name
-            )
+                    "Implementation-Version": version,
+                    "Implementation-Title": project.name
+                    )
         }
     }
 
@@ -152,6 +148,7 @@ project(':exhibitor-core') {
 }
 
 project(':exhibitor-standalone') {
+    apply plugin: 'rpm'
     dependencies {
         compile (project(":exhibitor-core")) {
             exclude group: 'com.sun.jersey', module: 'jersey-client'
@@ -165,17 +162,47 @@ project(':exhibitor-standalone') {
     }
 
     jar {
-        from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
         manifest {
             attributes (
-                'Main-Class': 'com.netflix.exhibitor.application.ExhibitorMain',
-                'Implementation-Version': project.version
-            )
+                    'Main-Class': 'com.netflix.exhibitor.application.ExhibitorMain',
+                    'Implementation-Version': project.version
+                    )
         }
+    }
+
+    task rpm(type:Rpm) {
+        packageName = 'exhibitor'
+        release = 1
+        arch = NOARCH
+        os = LINUX
+
+        into '/opt/exhibitor/'
+        from (jar.outputs.files) { 
+            into 'lib' 
+        }
+        from (configurations.compile) {
+            into 'lib'
+        }
+        
+        from ('src/main/script') {
+            into 'bin'
+            fileMode = 0755
+        }
+        
+        from ('src/main/config') {
+            into '/etc/sysconfig/'
+        }
+        
+        link('/etc/init.d/exhibitor', '/opt/exhibitor/bin/exhibitor.sh')
     }
 }
 
 // Generate wrapper, which is distributed as part of source to alleviate the need of installing gradle
-task createWrapper(type: Wrapper) {
-    gradleVersion = '1.0-milestone-8a'
+task createWrapper(type: Wrapper) { gradleVersion = '1.0-milestone-8a' }
+
+
+buildscript {
+    repositories { mavenCentral() }
+
+    dependencies { classpath 'com.trigonic:gradle-rpm-plugin:1.1' }
 }
