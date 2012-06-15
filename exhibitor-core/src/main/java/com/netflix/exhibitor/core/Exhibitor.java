@@ -132,8 +132,6 @@ public class Exhibitor implements Closeable
      */
     public Exhibitor(ConfigProvider configProvider, Collection<? extends UITab> additionalUITabs, BackupProvider backupProvider, Arguments arguments) throws Exception
     {
-        System.out.println(getVersion());
-
         this.arguments = arguments;
         log = new ActivityLog(arguments.logWindowSizeLines);
         this.configManager = new ConfigManager(this, configProvider, arguments.configCheckMs);
