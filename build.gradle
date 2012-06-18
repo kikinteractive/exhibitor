@@ -173,6 +173,7 @@ project(':exhibitor-standalone') {
     task rpm(type:Rpm) {
         packageName = 'exhibitor'
         release = 1
+        version = project.version.replaceAll('SNAPSHOT', new Date().format("yyyyMMddhhmmss"))
         arch = NOARCH
         os = LINUX
 
