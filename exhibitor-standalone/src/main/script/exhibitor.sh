@@ -32,7 +32,7 @@ JAVA_CMD=java
 # CLASSPATH munging
 CLASSPATH="${CLASSPATH}:$(build-classpath-directory ${EXHIBITOR_HOME}/lib 2>/dev/null)"
 
-PARAMS="-cp $CLASSPATH $EXHIBITOR_OPTS com.netflix.exhibitor.application.ExhibitorMain"
+PARAMS="-cp $CLASSPATH $EXHIBITOR_OPTS com.netflix.exhibitor.application.ExhibitorMain --nodemodification true"
 
 case "$1" in
     start)
