@@ -191,7 +191,7 @@ project(':exhibitor-standalone') {
         }
         
         from ('src/main/config') {
-            into '/etc/sysconfig/'
+            into '/etc/exhibitor/'
         }
         
         link('/etc/init.d/exhibitor', '/opt/exhibitor/bin/exhibitor.sh')

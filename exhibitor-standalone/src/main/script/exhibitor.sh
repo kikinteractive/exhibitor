@@ -23,7 +23,7 @@ else
 fi
 
 # Source exhibitor configuration.
-[ -f /etc/sysconfig/exhibitor ] &&  . /etc/sysconfig/exhibitor
+[ -f /etc/exhibitor/exhibitor.conf ] &&  . /etc/exhibitor/exhibitor.conf
 
 set_jvm
 
@@ -32,7 +32,7 @@ JAVA_CMD=java
 # CLASSPATH munging
 CLASSPATH="${CLASSPATH}:$(build-classpath-directory ${EXHIBITOR_HOME}/lib 2>/dev/null)"
 
-PARAMS="-cp $CLASSPATH $EXHIBITOR_OPTS com.netflix.exhibitor.application.ExhibitorMain --nodemodification true"
+PARAMS="-cp $CLASSPATH $EXHIBITOR_OPTS com.netflix.exhibitor.application.ExhibitorMain $EXHIBITOR_ARGS"
 
 case "$1" in
     start)
@@ -45,7 +45,7 @@ case "$1" in
         
         # retrieving pid of the parent process
         /bin/su -l "$EXHIBITOR_USER" --shel=/bin/bash -c "$JAVA_CMD $PARAMS 2> $EXHIBITOR_LOG_FILE &"
-        echo $(ps h -u "$EXHIBITOR_USER" -o pid,cmd | grep java | cut -d ' ' -f 2) > "$EXHIBITOR_PID"
+        echo $(jps | grep ExhibitorMain | awk '{print $1}') > "$EXHIBITOR_PID"
         if [ $? == "0" ]; then
             success 
         else
