@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.rest;
@@ -24,16 +22,22 @@ import com.google.common.collect.Lists;
 import com.netflix.exhibitor.core.activity.ActivityLog;
 import com.netflix.exhibitor.core.activity.QueueGroups;
 import com.netflix.exhibitor.core.backup.BackupMetaData;
-import com.netflix.exhibitor.core.backup.RestoreAndIndex;
 import com.netflix.exhibitor.core.config.StringConfigs;
 import com.netflix.exhibitor.core.entities.Index;
 import com.netflix.exhibitor.core.entities.NameAndModifiedDate;
-import com.netflix.exhibitor.core.entities.NewIndexRequest;
 import com.netflix.exhibitor.core.entities.Result;
 import com.netflix.exhibitor.core.entities.SearchId;
 import com.netflix.exhibitor.core.entities.SearchRequest;
 import com.netflix.exhibitor.core.entities.SearchResult;
-import com.netflix.exhibitor.core.index.*;
+import com.netflix.exhibitor.core.index.CachedSearch;
+import com.netflix.exhibitor.core.index.EntryTypes;
+import com.netflix.exhibitor.core.index.IndexCache;
+import com.netflix.exhibitor.core.index.IndexList;
+import com.netflix.exhibitor.core.index.IndexMetaData;
+import com.netflix.exhibitor.core.index.IndexProcessorActivity;
+import com.netflix.exhibitor.core.index.LogSearch;
+import com.netflix.exhibitor.core.index.QueryBuilder;
+import com.netflix.exhibitor.core.index.SearchItem;
 import org.apache.lucene.search.Query;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.JsonNodeFactory;
@@ -60,9 +64,6 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 
-/**
- * REST calls for dealing with indexed (via Lucene) log files
- */
 @Path("exhibitor/v1/index")
 public class IndexResource
 {
@@ -77,45 +78,11 @@ public class IndexResource
     }
 
     @Path("new-index")
-    @POST
-    @Consumes(MediaType.APPLICATION_JSON)
+    @GET
     @Produces(MediaType.APPLICATION_JSON)
-    public Response newIndex(NewIndexRequest request) throws Exception
+    public Response newIndex() throws Exception
     {
-        if ( request.getType().equals("backup") )
-        {
-            RestoreAndIndex     restoreAndIndex = new RestoreAndIndex(context.getExhibitor(), new BackupMetaData(request.getBackup().getName(), request.getBackup().getModifiedDate()));
-            context.getExhibitor().getActivityQueue().add(QueueGroups.IO, restoreAndIndex);
-        }
-        else
-        {
-            File        path = null;
-            if ( request.getType().equals("default") )
-            {
-                path = ZooKeeperLogFiles.getDataDir(context.getExhibitor());
-            }
-            else if ( request.getType().equals("path") )
-            {
-                path = new File(request.getValue());
-            }
-
-            if ( path != null )
-            {
-                try
-                {
-                    IndexerUtil.startIndexing(context.getExhibitor(), path);
-                }
-                catch ( Exception e )
-                {
-                    context.getExhibitor().getLog().add(ActivityLog.Type.ERROR, "Could not start indexing for: " + path, e);
-                }
-            }
-            else
-            {
-                context.getExhibitor().getLog().add(ActivityLog.Type.INFO, "No log files found");
-            }
-        }
-
+        context.getExhibitor().getActivityQueue().add(QueueGroups.IO, new IndexProcessorActivity(context.getExhibitor()));
         return Response.ok(new Result("OK", true)).build();
     }
 

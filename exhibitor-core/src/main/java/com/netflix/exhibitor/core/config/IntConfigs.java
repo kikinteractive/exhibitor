@@ -1,26 +1,21 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.config;
 
-/**
- * Config selectors for integer values
- */
 public enum IntConfigs
 {
     /**
@@ -118,6 +113,44 @@ public enum IntConfigs
             return false;
         }
     },
+
+    /**
+     * true/false (0 or 1) - determine if automatic instance management is on/off - default is false
+     */
+    AUTO_MANAGE_INSTANCES()
+    {
+        @Override
+        public boolean isRestartSignificant()
+        {
+            return false;
+        }
+    },
+
+    /**
+     * Period in ms to wait for instances to settle (i.e. no change in state) before processing
+     * automatic instance management
+     */
+    AUTO_MANAGE_INSTANCES_SETTLING_PERIOD_MS()
+    {
+        @Override
+        public boolean isRestartSignificant()
+        {
+            return false;
+        }
+    },
+
+    /**
+     * Marks which instances are made Observers by automatic instance management. Instances below
+     * this number are normal instances. Instances from this number and up are Observers.
+     */
+    OBSERVER_THRESHOLD()
+    {
+        @Override
+        public boolean isRestartSignificant()
+        {
+            return false;
+        }
+    }
     ;
 
     /**

@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.backup.filesystem;
@@ -25,15 +23,17 @@ import com.netflix.exhibitor.core.backup.BackupProvider;
 import com.netflix.exhibitor.core.Exhibitor;
 import com.netflix.exhibitor.core.activity.ActivityLog;
 import com.netflix.exhibitor.core.backup.BackupConfigSpec;
+import com.netflix.exhibitor.core.backup.BackupStream;
+import java.io.BufferedInputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Backup provider that uses the file system
- */
 public class FileSystemBackupProvider implements BackupProvider
 {
     private static final BackupConfigSpec CONFIG_DIRECTORY = new BackupConfigSpec("directory", "Destination Path", "The path of the directory where backups are written to", "", BackupConfigSpec.Type.STRING);
@@ -96,18 +96,30 @@ public class FileSystemBackupProvider implements BackupProvider
     public List<BackupMetaData> getAvailableBackups(Exhibitor exhibitor, Map<String, String> configValues) throws Exception
     {
         ImmutableList.Builder<BackupMetaData>   builder = ImmutableList.builder();
-        File                                    directory = new File(configValues.get(CONFIG_DIRECTORY.getKey()));
-        if ( directory.isDirectory() )
+        String                                  pathname = configValues.get(CONFIG_DIRECTORY.getKey());
+        if ( pathname != null )
         {
-            for ( File nameDir : directory.listFiles() )
+            File                                    directory = new File(pathname);
+            if ( directory.isDirectory() )
             {
-                if ( nameDir.isDirectory() )
+                File[] files = directory.listFiles();
+                if ( files != null )
                 {
-                    for ( File version : nameDir.listFiles() )
+                    for ( File nameDir : files )
                     {
-                        if ( version.isFile() )
+                        if ( nameDir.isDirectory() )
                         {
-                            builder.add(new BackupMetaData(nameDir.getName(), Long.parseLong(version.getName())));
+                            File[] subFiles = nameDir.listFiles();
+                            if ( subFiles != null )
+                            {
+                                for ( File version : subFiles )
+                                {
+                                    if ( version.isFile() )
+                                    {
+                                        builder.add(new BackupMetaData(nameDir.getName(), Long.parseLong(version.getName())));
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -126,6 +138,34 @@ public class FileSystemBackupProvider implements BackupProvider
         {
             exhibitor.getLog().add(ActivityLog.Type.ERROR, "Could not delete old backup: " + destinationFile);
         }
+    }
+
+    @Override
+    public BackupStream getBackupStream(Exhibitor exhibitor, BackupMetaData backup, Map<String, String> configValues) throws Exception
+    {
+        File        directory = new File(configValues.get(CONFIG_DIRECTORY.getKey()));
+        File        nameDirectory = new File(directory, backup.getName());
+        File        source = new File(nameDirectory, Long.toString(backup.getModifiedDate()));
+        if ( !source.exists() )
+        {
+            return null;
+        }
+
+        final InputStream   in = new BufferedInputStream(new FileInputStream(source));
+        return new BackupStream()
+        {
+            @Override
+            public InputStream getStream()
+            {
+                return in;
+            }
+
+            @Override
+            public void close() throws IOException
+            {
+                in.close();
+            }
+        };
     }
 
     @Override

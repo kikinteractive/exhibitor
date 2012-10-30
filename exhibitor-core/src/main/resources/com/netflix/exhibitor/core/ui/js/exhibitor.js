@@ -1,6 +1,6 @@
 var BUILTIN_TAB_QTY = 4;
 var AUTO_REFRESH_PERIOD = 5000;
-var UPDATE_STATE_PERIOD = 10000;
+var UPDATE_STATE_PERIOD = 2500;
 
 var URL_GET_BACKUPS = "../index/get-backups";
 var URL_NEW_INDEX = "../index/new-index";
@@ -13,6 +13,8 @@ var URL_RELEASE_CACHE_INDEX_SEARCH_BASE = "../index/release-cache/";
 
 var URL_CLUSTER_LOG_BASE = "../cluster/log/";
 var URL_CLUSTER_RESTART_BASE = "../cluster/restart/";
+var URL_CLUSTER_START_BASE = "../cluster/start/";
+var URL_CLUSTER_STOP_BASE = "../cluster/stop/";
 var URL_CLUSTER_4LTR_BASE = "../cluster/4ltr/";
 var URL_CLUSTER_SET_CONFIG_BASE = "../cluster/set/";
 var URL_CLUSTER_GET_STATE_BASE = "../cluster/state/";
@@ -32,7 +34,12 @@ var URL_GET_BACKUP_CONFIG = "backup-config";
 var URL_GET_TABS = "tabs";
 var URL_RESTART = "stop";
 
+var AUTOMATIC_INSTANCE_MANAGEMENT_HELP_TEXT = "When on, as new instances read the shared config they will automatically add themselves to the ensemble via a rolling release. Additionally, old instances will be automatically removed via rolling release.";
+
 var doConfigUpdates = true;
+var configChangesBeingSubmitted = false;
+
+var backupTabIndex = 3;
 
 function messageDialog(title, message, noIcon)
 {
@@ -57,8 +64,17 @@ function messageDialog(title, message, noIcon)
     $("#message-dialog").dialog("open");
 }
 
-function okCancelDialog(title, message, okFunction)
+function okCancelDialog(title, message, okFunction, noIcon)
 {
+    if ( noIcon )
+    {
+        $('#message-dialog-icon').hide();
+    }
+    else
+    {
+        $('#message-dialog-icon').show();
+    }
+
     $('#message-dialog-text').html(message);
     $("#message-dialog").dialog("option", "title", title);
     $("#message-dialog").dialog("option", "buttons",
@@ -83,11 +99,12 @@ var systemState = {};
 var systemConfig = {};
 var connectedToExhibitor = true;
 var currentVersion = null;
+var backupTabRemoved = false;
 function updateState()
 {
     if ( !hasBackupConfig )
     {
-        $.getJSON(URL_GET_BACKUP_CONFIG, function(data){
+        $.getJSON(URL_GET_BACKUP_CONFIG + '?ts=' + Date.now(), function(data){
             hasBackupConfig = true;
             addBackupExtraConfig(data);
         });
@@ -96,11 +113,12 @@ function updateState()
 
     $.ajax({
         url: URL_GET_STATE,
+        cache: false,
         type: 'GET',
         success: function (data, dummy, jqXHR){
             systemState = data;
 
-            if ( doConfigUpdates ) {
+            if ( doConfigUpdates && !configChangesBeingSubmitted ) {
                 systemConfig = systemState.config;
             }
 
@@ -128,8 +146,21 @@ function updateState()
             }
             else
             {
+                if ( !backupTabRemoved )
+                {
+                    backupTabRemoved = true;
+                    $("#tabs").tabs("remove", backupTabIndex);
+                    backupTabIndex = -1;
+                    --BUILTIN_TAB_QTY;
+                }
                 $('#config-backups-fieldset').hide();
                 $('#backups-enabled-control').hide();
+            }
+
+            if ( systemState.standaloneMode )
+            {
+                $('#standalone-mode-message').show();
+                $('#fieldset-automatic-instance-management').hide();
             }
 
             if ( systemState.nodeMutationsAllowed )
@@ -145,13 +176,10 @@ function updateState()
 
             $.unblockUI();
 
-            var     pageTitle = "Exhibitor for ZooKeeper";
             if ( systemState.extraHeadingText )
             {
-                pageTitle += ' - ' + systemState.extraHeadingText;
+                $('#page-title-extra').html(systemState.extraHeadingText);
             }
-
-            $('#page-title').html(pageTitle);
             $('#version').html(systemState.version);
             $('#not-connected-alert').hide();
             $('#instance-hostname').html(systemConfig.hostname);
@@ -221,8 +249,11 @@ function buildNewConfig()
 {
     var newConfig = {};
     newConfig.zookeeperInstallDirectory = $('#config-zookeeper-install-dir').val();
-    newConfig.zookeeperDataDirectory = $('#config-zookeeper-data-dir').val();
+    newConfig.zookeeperDataDirectory = $('#config-zookeeper-snapshot-dir').val();
+    newConfig.zookeeperLogDirectory = $('#config-zookeeper-log-dir').val();
     newConfig.logIndexDirectory = $('#config-log-index-dir').val();
+    newConfig.autoManageInstancesSettlingPeriodMs = $('#config-automatic-management-period-ms').val();
+    newConfig.observerThreshold = $('#config-observer-threshold').val();
     newConfig.serversSpec = $('#config-servers-spec').val();
     newConfig.javaEnvironment = $('#config-java-env').val();
     newConfig.log4jProperties = $('#config-java-log4j').val();
@@ -234,6 +265,7 @@ function buildNewConfig()
     newConfig.cleanupMaxFiles = $('#config-cleanup-max-files').val();
     newConfig.backupPeriodMs = $('#config-backup-ms').val();
     newConfig.backupMaxStoreMs = $('#config-backup-max-store-ms').val();
+    newConfig.autoManageInstances = $('#cp-auto-init-instances').prop("checked") ? "1" : "0";
 
     var zooCfgTab = $('#config-custom').val().split("\n");
     newConfig.zooCfgExtra = {};
@@ -265,27 +297,54 @@ function turnOffEditableSwitch()
     checkLightSwitch('#config-editable', false);
     handleEditableSwitch();
 }
+
+function hideShowConfigProcessingDialog(showIt)
+{
+    $('#updating-config-dialog').dialog(showIt ? "open" : "close");
+}
+
 function submitConfigChanges(rolling)
 {
+    if ( configChangesBeingSubmitted )
+    {
+        messageDialog("Please Wait", "A previous config change is still being submitted");
+        return;
+    }
+
     var newConfig = buildNewConfig();
 
     systemConfig = newConfig;
 
     var payload = JSON.stringify(newConfig);
+
+    configChangesBeingSubmitted = true;
+    hideShowConfigProcessingDialog(true);
     $.ajax({
         type: 'POST',
         url: rolling ? URL_SET_CONFIG_ROLLING : URL_SET_CONFIG,
+        cache: false,
         data: payload,
         contentType: 'application/json',
-        success:function(data)
-        {
+        success:function(data){
+            hideShowConfigProcessingDialog(false);
+            configChangesBeingSubmitted = false;
             if ( !data.succeeded )
             {
                 messageDialog("Error", data.message);
             }
+        },
+        error:function(){
+            hideShowConfigProcessingDialog(false);
+            configChangesBeingSubmitted = false;
+            messageDialog("There was a communication error. The config change may not have committed.")
         }
     });
     turnOffEditableSwitch();
+
+    if ( rolling )
+    {
+        messageDialog("Rolling Config", "The rolling configuration change has been submitted and will start in a moment.", true);
+    }
 }
 
 function getBackupExtraId(obj)
@@ -295,8 +354,13 @@ function getBackupExtraId(obj)
 
 function ableConfig(enable)
 {
+    ableLightSwitch('#cp-auto-init-instances', null, enable);
+
     $('#config-zookeeper-install-dir').prop('disabled', !enable);
-    $('#config-zookeeper-data-dir').prop('disabled', !enable);
+    $('#config-zookeeper-snapshot-dir').prop('disabled', !enable);
+    $('#config-zookeeper-log-dir').prop('disabled', !enable);
+    $('#config-automatic-management-period-ms').prop('disabled', !enable);
+    $('#config-observer-threshold').prop('disabled', !enable);
     $('#config-log-index-dir').prop('disabled', !enable);
     $('#config-servers-spec').prop('disabled', !enable);
     $('#config-java-env').prop('disabled', !enable);
@@ -323,7 +387,7 @@ function ableConfig(enable)
 
 function updateConfig()
 {
-    if ( !doConfigUpdates ) {
+    if ( !doConfigUpdates || configChangesBeingSubmitted ) {
         return;
     }
 
@@ -333,8 +397,12 @@ function updateConfig()
         configExtra += p + "=" + systemConfig.zooCfgExtra[p] + "\n";
     }
 
+    checkLightSwitch('#cp-auto-init-instances', (systemConfig.autoManageInstances != "0"));
     $('#config-zookeeper-install-dir').val(systemConfig.zookeeperInstallDirectory);
-    $('#config-zookeeper-data-dir').val(systemConfig.zookeeperDataDirectory);
+    $('#config-zookeeper-snapshot-dir').val(systemConfig.zookeeperDataDirectory);
+    $('#config-zookeeper-log-dir').val(systemConfig.zookeeperLogDirectory);
+    $('#config-automatic-management-period-ms').val(systemConfig.autoManageInstancesSettlingPeriodMs);
+    $('#config-observer-threshold').val(systemConfig.observerThreshold);
     $('#config-log-index-dir').val(systemConfig.logIndexDirectory);
     $('#config-servers-spec').val(systemConfig.serversSpec);
     $('#config-java-env').val(systemConfig.javaEnvironment);
@@ -378,7 +446,7 @@ function updateConfig()
 function refreshCurrentTab()
 {
     var selected = $("#tabs").tabs("option", "selected");
-    if ( selected == 3 )
+    if ( selected == backupTabIndex )
     {
         var radio = $('input:radio:checked[name="restore-item-radio"]');
         updateRestoreItems(radio.val());
@@ -464,12 +532,14 @@ function checkConfigConfirmation()
     var     hasEnsembleLevelChange =
         (newConfig.zookeeperInstallDirectory != systemConfig.zookeeperInstallDirectory)
         || (newConfig.zookeeperDataDirectory != systemConfig.zookeeperDataDirectory)
+        || (newConfig.zookeeperLogDirectory != systemConfig.zookeeperLogDirectory)
         || (newConfig.serversSpec != systemConfig.serversSpec)
         || (newConfig.clientPort != systemConfig.clientPort)
         || (newConfig.connectPort != systemConfig.connectPort)
         || (newConfig.electionPort != systemConfig.electionPort)
         || (newConfig.javaEnvironment != systemConfig.javaEnvironment)
         || (newConfig.log4jProperties != systemConfig.log4jProperties)
+        || (JSON.stringify(newConfig.zooCfgExtra) != JSON.stringify(systemConfig.zooCfgExtra))
     ;
 
     if ( !hasEnsembleLevelChange )
@@ -486,7 +556,14 @@ function checkConfigConfirmation()
 
     if ( hasEnsembleLevelChange )
     {
-        $('#config-commit-dialog').dialog("open");
+        if ( systemState.standaloneMode )
+        {
+            $('#standalone-config-commit-dialog').dialog("open");
+        }
+        else
+        {
+            $('#config-commit-dialog').dialog("open");
+        }
     }
     else
     {
@@ -499,7 +576,7 @@ function checkConfigConfirmation()
 var customTabs = new Array();
 $(function ()
 {
-    $.getJSON(URL_GET_TABS, function (data){
+    $.getJSON(URL_GET_TABS + '?ts=' + Date.now(), function (data){
         var uiTabSpec = $.makeArray(data);
         for ( var i = 0; i < uiTabSpec.length; ++i )
         {
@@ -509,7 +586,9 @@ $(function ()
             tabData.url = uiTabSpec[i].url;
             customTabs[i] = tabData;
 
-            $('#tabs').append('<div id="' + tabData.id + '" class="ui-helper-hidden"><div id="' + tabData.contentId + '" class="text"></div></div>')
+            var tabContentClass = uiTabSpec[i].html ? 'tab-html' : 'tab-text';
+            var tabContent = '<div id="' + tabData.id + '" class="ui-helper-hidden"><div id="' + tabData.contentId + '" class="' + tabContentClass + '"></div></div>';
+            $('#tabs').append(tabContent);
             $('#tabs-list').append('<li><a href="#' + tabData.id + '">' + uiTabSpec[i].name + '</a></li>');
         }
         $('#tabs').tabs({
@@ -617,6 +696,11 @@ $(function ()
         width: 600,
         height: 400
     });
+    $("#log-refresh-button").button({
+        icons:{
+            primary: "ui-icon-refresh"
+        }
+    });
 
     $('#rolling-config-cancel-dialog').dialog({
         width: 500,
@@ -692,7 +776,44 @@ $(function ()
         }
     );
 
+    $('#standalone-config-commit-dialog').dialog({
+        width: 500,
+        height: 250,
+        modal: true,
+        autoOpen: false,
+        title: "Config Change Warning"
+    });
+    $("#standalone-config-commit-dialog").dialog("option", "buttons", {
+            'Cancel': function (){
+                $(this).dialog("close");
+            },
+
+            'OK': function (){
+                $(this).dialog("close");
+                submitConfigChanges(false);
+            }
+        }
+    );
+
+    $('#updating-config-progressbar').progressbar({
+        value: 100
+    });
+    $('#updating-config-dialog').dialog({
+        width: 300,
+        height: 100,
+        modal: true,
+        autoOpen: false,
+        title: "Config change in progress...",
+        resizable: false
+    });
+
+    $('#cp-auto-init-instances-help').attr("title", AUTOMATIC_INSTANCE_MANAGEMENT_HELP_TEXT);
+    $('#cp-auto-init-instances-help-button').button().click(function(){
+        messageDialog("Automatic Server List Add/Remove", AUTOMATIC_INSTANCE_MANAGEMENT_HELP_TEXT);
+    });
+
     makeLightSwitch('#config-editable', handleEditableSwitch);
+    makeLightSwitch('#cp-auto-init-instances', null, true);
     turnOffEditableSwitch();
 
     initRestoreUI();

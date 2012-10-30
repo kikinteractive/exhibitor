@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.config;
@@ -26,9 +24,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 
-/**
- * Config imp that uses a Properties file
- */
 public class PropertyBasedInstanceConfig extends ConfigCollectionBase
 {
     private final Properties properties;
@@ -38,13 +33,16 @@ public class PropertyBasedInstanceConfig extends ConfigCollectionBase
     private final WrappedInstanceConfig rollingConfig;
 
     @VisibleForTesting
-    static final String ROOT_PROPERTY_PREFIX = "com.netflix.exhibitor.";
+    public static final String ROOT_PROPERTY_PREFIX = "com.netflix.exhibitor.";
 
     @VisibleForTesting
-    static final String ROLLING_PROPERTY_PREFIX = "com.netflix.exhibitor-rolling.";
+    public static final String ROLLING_PROPERTY_PREFIX = "com.netflix.exhibitor-rolling.";
 
-    private static final String PROPERTY_ROLLING_HOSTNAMES = "com.netflix.exhibitor-rolling-hostnames";
-    private static final String PROPERTY_ROLLING_HOSTNAMES_INDEX = "com.netflix.exhibitor-rolling-hostnames-index";
+    @VisibleForTesting
+    public static final String PROPERTY_ROLLING_HOSTNAMES = "com.netflix.exhibitor-rolling-hostnames";
+
+    @VisibleForTesting
+    public static final String PROPERTY_ROLLING_HOSTNAMES_INDEX = "com.netflix.exhibitor-rolling-hostnames-index";
 
     /**
      * Used to wrap an existing config
@@ -102,7 +100,7 @@ public class PropertyBasedInstanceConfig extends ConfigCollectionBase
     }
 
     @VisibleForTesting
-    static String toName(Enum e, String prefix)
+    public static String toName(Enum e, String prefix)
     {
         String  s = e.name();
         s = s.replace('_', '-');

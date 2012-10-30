@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core;
@@ -26,21 +24,32 @@ import com.netflix.curator.framework.CuratorFrameworkFactory;
 import com.netflix.curator.retry.ExponentialBackoffRetry;
 import com.netflix.exhibitor.core.activity.ActivityLog;
 import com.netflix.exhibitor.core.activity.ActivityQueue;
+import com.netflix.exhibitor.core.activity.QueueGroups;
+import com.netflix.exhibitor.core.activity.RepeatingActivity;
+import com.netflix.exhibitor.core.automanage.AutomaticInstanceManagement;
+import com.netflix.exhibitor.core.automanage.RemoteInstanceRequestClient;
+import com.netflix.exhibitor.core.automanage.RemoteInstanceRequestClientImpl;
 import com.netflix.exhibitor.core.backup.BackupManager;
 import com.netflix.exhibitor.core.backup.BackupProvider;
 import com.netflix.exhibitor.core.config.ConfigListener;
 import com.netflix.exhibitor.core.config.ConfigManager;
 import com.netflix.exhibitor.core.config.ConfigProvider;
 import com.netflix.exhibitor.core.config.IntConfigs;
+import com.netflix.exhibitor.core.config.JQueryStyle;
 import com.netflix.exhibitor.core.controlpanel.ControlPanelValues;
 import com.netflix.exhibitor.core.index.IndexCache;
 import com.netflix.exhibitor.core.processes.ProcessMonitor;
 import com.netflix.exhibitor.core.processes.ProcessOperations;
 import com.netflix.exhibitor.core.processes.StandardProcessOperations;
 import com.netflix.exhibitor.core.rest.UITab;
+import com.netflix.exhibitor.core.servo.GetMonitorData;
+import com.netflix.exhibitor.core.servo.ZookeeperMonitoredData;
 import com.netflix.exhibitor.core.state.CleanupManager;
 import com.netflix.exhibitor.core.state.ManifestVersion;
 import com.netflix.exhibitor.core.state.MonitorRunningInstance;
+import com.netflix.servo.monitor.CompositeMonitor;
+import com.netflix.servo.monitor.Monitors;
+import jsr166y.ForkJoinPool;
 import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -48,32 +57,29 @@ import java.net.UnknownHostException;
 import java.util.Collection;
 import java.util.concurrent.atomic.AtomicReference;
 
-/**
- * <p>
- *     The main application - this class serves as a container for the various
- *     objects needed by the application and as a lifecycle maintainer
- * </p>
- *
- * <p>
- *     Most users of the Exhibitor system will not need direct access to this class
- * </p>
- */
 public class Exhibitor implements Closeable
 {
-    private final ActivityLog               log;
-    private final ActivityQueue             activityQueue = new ActivityQueue();
-    private final MonitorRunningInstance    monitorRunningInstance;
-    private final Collection<UITab>         additionalUITabs;
-    private final ProcessOperations         processOperations;
-    private final CleanupManager            cleanupManager;
-    private final AtomicReference<State>    state = new AtomicReference<State>(State.LATENT);
-    private final IndexCache                indexCache;
-    private final ControlPanelValues        controlPanelValues;
-    private final BackupManager             backupManager;
-    private final ConfigManager             configManager;
-    private final Arguments                 arguments;
-    private final ProcessMonitor            processMonitor;
-    private final ManifestVersion           manifestVersion = new ManifestVersion();
+    private final ActivityLog                   log;
+    private final ActivityQueue                 activityQueue = new ActivityQueue();
+    private final MonitorRunningInstance        monitorRunningInstance;
+    private final Collection<UITab>             additionalUITabs;
+    private final ProcessOperations             processOperations;
+    private final CleanupManager                cleanupManager;
+    private final AtomicReference<State>        state = new AtomicReference<State>(State.LATENT);
+    private final IndexCache                    indexCache;
+    private final ControlPanelValues            controlPanelValues;
+    private final BackupManager                 backupManager;
+    private final ConfigManager                 configManager;
+    private final ExhibitorArguments            arguments;
+    private final ProcessMonitor                processMonitor;
+    private final RepeatingActivity             autoInstanceManagement;
+    private final RepeatingActivity             servoMonitoring;
+    private final CompositeMonitor<?>           servoCompositeMonitor;
+    private final ManifestVersion               manifestVersion = new ManifestVersion();
+    private final ForkJoinPool                  forkJoinPool = new ForkJoinPool();
+    private final RemoteInstanceRequestClient   remoteInstanceRequestClient = new RemoteInstanceRequestClientImpl();
+
+    public static final int        AUTO_INSTANCE_MANAGEMENT_PERIOD_MS = 60000;
 
     private CuratorFramework    localConnection;    // protected by synchronization
 
@@ -82,26 +88,6 @@ public class Exhibitor implements Closeable
         LATENT,
         STARTED,
         STOPPED
-    }
-
-    public static class Arguments
-    {
-        private final int       connectionTimeOutMs;
-        private final int       logWindowSizeLines;
-        private final int       configCheckMs;
-        private final String    extraHeadingText;
-        private final String    thisJVMHostname;
-        private final boolean   allowNodeMutations;
-
-        public Arguments(int connectionTimeOutMs, int logWindowSizeLines, String thisJVMHostname, int configCheckMs, String extraHeadingText, boolean allowNodeMutations)
-        {
-            this.connectionTimeOutMs = connectionTimeOutMs;
-            this.logWindowSizeLines = logWindowSizeLines;
-            this.thisJVMHostname = thisJVMHostname;
-            this.configCheckMs = configCheckMs;
-            this.extraHeadingText = extraHeadingText;
-            this.allowNodeMutations = allowNodeMutations;
-        }
     }
 
     /**
@@ -130,7 +116,7 @@ public class Exhibitor implements Closeable
      * @param arguments startup arguments
      * @throws IOException errors
      */
-    public Exhibitor(ConfigProvider configProvider, Collection<? extends UITab> additionalUITabs, BackupProvider backupProvider, Arguments arguments) throws Exception
+    public Exhibitor(ConfigProvider configProvider, Collection<? extends UITab> additionalUITabs, BackupProvider backupProvider, ExhibitorArguments arguments) throws Exception
     {
         this.arguments = arguments;
         log = new ActivityLog(arguments.logWindowSizeLines);
@@ -141,6 +127,11 @@ public class Exhibitor implements Closeable
         cleanupManager = new CleanupManager(this);
         indexCache = new IndexCache(log);
         processMonitor = new ProcessMonitor(this);
+        autoInstanceManagement = new RepeatingActivity(log, activityQueue, QueueGroups.MAIN, new AutomaticInstanceManagement(this), getAutoInstanceManagementPeriod());
+
+        AtomicReference<CompositeMonitor<?>>    theMonitor = new AtomicReference<CompositeMonitor<?>>();
+        servoMonitoring = initServo(this, log, activityQueue, arguments, theMonitor);
+        servoCompositeMonitor = theMonitor.get();
 
         controlPanelValues = new ControlPanelValues();
 
@@ -182,6 +173,11 @@ public class Exhibitor implements Closeable
         monitorRunningInstance.start();
         cleanupManager.start();
         backupManager.start();
+        autoInstanceManagement.start();
+        if ( servoMonitoring != null )
+        {
+            servoMonitoring.start();
+        }
 
         configManager.addConfigListener
         (
@@ -213,6 +209,13 @@ public class Exhibitor implements Closeable
     {
         Preconditions.checkState(state.compareAndSet(State.STARTED, State.STOPPED));
 
+        if ( (arguments.servoRegistration != null) && (servoCompositeMonitor != null) )
+        {
+            arguments.servoRegistration.getMonitorRegistry().unregister(servoCompositeMonitor);
+        }
+
+        Closeables.closeQuietly(servoMonitoring);
+        Closeables.closeQuietly(autoInstanceManagement);
         Closeables.closeQuietly(processMonitor);
         Closeables.closeQuietly(indexCache);
         Closeables.closeQuietly(backupManager);
@@ -220,6 +223,7 @@ public class Exhibitor implements Closeable
         Closeables.closeQuietly(monitorRunningInstance);
         Closeables.closeQuietly(configManager);
         Closeables.closeQuietly(activityQueue);
+        Closeables.closeQuietly(remoteInstanceRequestClient);
         closeLocalConnection();
     }
 
@@ -229,6 +233,11 @@ public class Exhibitor implements Closeable
     public Collection<UITab> getAdditionalUITabs()
     {
         return additionalUITabs;
+    }
+
+    public JQueryStyle  getJQueryStyle()
+    {
+        return arguments.jQueryStyle;
     }
 
     public ConfigManager getConfigManager()
@@ -286,13 +295,18 @@ public class Exhibitor implements Closeable
     {
         if ( localConnection == null )
         {
-            localConnection = CuratorFrameworkFactory.newClient
-            (
-                "localhost:" + configManager.getConfig().getInt(IntConfigs.CLIENT_PORT),
-                arguments.connectionTimeOutMs * 10,
-                arguments.connectionTimeOutMs,
-                new ExponentialBackoffRetry(10, 3)
-            );
+            CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder()
+                .connectString("localhost:" + configManager.getConfig().getInt(IntConfigs.CLIENT_PORT))
+                .sessionTimeoutMs(arguments.connectionTimeOutMs * 10)
+                .connectionTimeoutMs(arguments.connectionTimeOutMs)
+                .retryPolicy(new ExponentialBackoffRetry(1000, 3));
+
+            if ( arguments.aclProvider != null )
+            {
+                builder = builder.aclProvider(arguments.aclProvider);
+            }
+
+            localConnection = builder.build();
             localConnection.start();
         }
         return localConnection;
@@ -318,10 +332,68 @@ public class Exhibitor implements Closeable
         return monitorRunningInstance;
     }
 
+    public int getRestPort()
+    {
+        return arguments.restPort;
+    }
+
+    public String getRestPath()
+    {
+        return arguments.restPath;
+    }
+
+    public String getRestScheme()
+    {
+        return arguments.restScheme;
+    }
+
+    public Runnable getShutdownProc()
+    {
+        return arguments.shutdownProc;
+    }
+
+    public RemoteInstanceRequestClient getRemoteInstanceRequestClient()
+    {
+        return remoteInstanceRequestClient;
+    }
+
+    public ExhibitorArguments.LogDirection getLogDirection()
+    {
+        return arguments.logDirection;
+    }
+
+    public ForkJoinPool getForkJoinPool()
+    {
+        return forkJoinPool;
+    }
+
     private synchronized void closeLocalConnection()
     {
         Closeables.closeQuietly(localConnection);
         localConnection = null;
     }
 
+    private static int getAutoInstanceManagementPeriod()
+    {
+        return AUTO_INSTANCE_MANAGEMENT_PERIOD_MS + (int)(AUTO_INSTANCE_MANAGEMENT_PERIOD_MS * Math.random());  // add some randomness to avoid overlap with other Exhibitors
+    }
+
+    private static RepeatingActivity initServo(Exhibitor exhibitor, ActivityLog log, ActivityQueue activityQueue, ExhibitorArguments arguments, AtomicReference<CompositeMonitor<?>> theMonitor)
+    {
+        theMonitor.set(null);
+
+        RepeatingActivity localServoMonitoring = null;
+        if ( arguments.servoRegistration != null )
+        {
+            ZookeeperMonitoredData  zookeeperMonitoredData = new ZookeeperMonitoredData();
+            CompositeMonitor<?>     compositeMonitor = Monitors.newObjectMonitor(zookeeperMonitoredData);
+
+            GetMonitorData          getMonitorData = new GetMonitorData(exhibitor, zookeeperMonitoredData);
+            localServoMonitoring = new RepeatingActivity(log, activityQueue, QueueGroups.IO, getMonitorData, arguments.servoRegistration.getZookeeperPollMs());
+            arguments.servoRegistration.getMonitorRegistry().register(compositeMonitor);
+
+            theMonitor.set(compositeMonitor);
+        }
+        return localServoMonitoring;
+    }
 }

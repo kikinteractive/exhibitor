@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.s3;
@@ -32,7 +30,6 @@ public class S3ClientFactoryImpl implements S3ClientFactory
         return new S3Client()
         {
             private final AtomicReference<RefCountedClient>   client = new AtomicReference<RefCountedClient>(null);
-
             {
                 changeCredentials(credentials);
             }
@@ -40,7 +37,7 @@ public class S3ClientFactoryImpl implements S3ClientFactory
             @Override
             public void changeCredentials(S3Credential credential) throws Exception
             {
-                RefCountedClient   newRefCountedClient = (credential != null) ? new RefCountedClient(new AmazonS3Client(new BasicAWSCredentials(credentials.getAccessKeyId(), credentials.getSecretAccessKey()))) : null;
+                RefCountedClient   newRefCountedClient = (credential != null) ? new RefCountedClient(new AmazonS3Client(new BasicAWSCredentials(credentials.getAccessKeyId(), credentials.getSecretAccessKey()))) : new RefCountedClient(new AmazonS3Client());
                 RefCountedClient   oldRefCountedClient = client.getAndSet(newRefCountedClient);
                 if ( oldRefCountedClient != null )
                 {
@@ -99,6 +96,21 @@ public class S3ClientFactoryImpl implements S3ClientFactory
                 try
                 {
                     return amazonS3Client.getObject(bucket, key);
+                }
+                finally
+                {
+                    holder.release();
+                }
+            }
+
+            @Override
+            public ObjectMetadata getObjectMetadata(String bucket, String key) throws Exception
+            {
+                RefCountedClient holder = client.get();
+                AmazonS3Client amazonS3Client = holder.useClient();
+                try
+                {
+                    return amazonS3Client.getObjectMetadata(bucket, key);
                 }
                 finally
                 {

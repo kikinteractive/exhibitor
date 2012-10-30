@@ -1,39 +1,37 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.rest;
 
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
 import com.netflix.exhibitor.core.activity.QueueGroups;
+import com.netflix.exhibitor.core.automanage.ClusterStatusTask;
+import com.netflix.exhibitor.core.automanage.RemoteInstanceRequest;
 import com.netflix.exhibitor.core.config.InstanceConfig;
 import com.netflix.exhibitor.core.config.IntConfigs;
 import com.netflix.exhibitor.core.config.StringConfigs;
 import com.netflix.exhibitor.core.controlpanel.ControlPanelTypes;
 import com.netflix.exhibitor.core.entities.Result;
+import com.netflix.exhibitor.core.entities.ServerStatus;
 import com.netflix.exhibitor.core.state.FourLetterWord;
 import com.netflix.exhibitor.core.state.InstanceStateTypes;
 import com.netflix.exhibitor.core.state.KillRunningInstance;
+import com.netflix.exhibitor.core.state.MonitorRunningInstance;
 import com.netflix.exhibitor.core.state.ServerList;
 import com.netflix.exhibitor.core.state.ServerSpec;
-import com.sun.jersey.api.client.Client;
-import com.sun.jersey.api.client.WebResource;
+import com.netflix.exhibitor.core.state.StartInstance;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.JsonNodeFactory;
@@ -43,41 +41,39 @@ import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.Context;
+import javax.ws.rs.core.GenericEntity;
 import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.UriBuilder;
+import javax.ws.rs.core.Response;
 import javax.ws.rs.core.UriInfo;
 import javax.ws.rs.ext.ContextResolver;
-import java.net.URI;
 import java.net.URLEncoder;
+import java.util.List;
 import java.util.concurrent.Callable;
 
-/**
- * REST calls for dealing with the entire ensemble
- */
 @SuppressWarnings("UnusedDeclaration")
 @Path("exhibitor/v1/cluster")
 public class ClusterResource
 {
     private final UIContext context;
-    private final Client client;
-    private final LoadingCache<URI, WebResource> webResources = CacheBuilder.newBuilder()
-        .softValues()
-        .build
-        (
-            new CacheLoader<URI, WebResource>()
-            {
-                @Override
-                public WebResource load(URI remoteUri) throws Exception
-                {
-                    return client.resource(remoteUri);
-                }
-            }
-        );
 
     public ClusterResource(@Context ContextResolver<UIContext> resolver)
     {
         context = resolver.getContext(UIContext.class);
-        client = Client.create();
+    }
+
+    @Path("status")
+    @GET
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getClusterStatus() throws Exception
+    {
+        InstanceConfig      config = context.getExhibitor().getConfigManager().getConfig();
+        ServerList          serverList = new ServerList(config.getString(StringConfigs.SERVERS_SPEC));
+
+        ClusterStatusTask   task = new ClusterStatusTask(context.getExhibitor(), serverList.getSpecs());
+        List<ServerStatus>  statuses = context.getExhibitor().getForkJoinPool().invoke(task);
+
+        GenericEntity<List<ServerStatus>> entity = new GenericEntity<List<ServerStatus>>(statuses){};
+        return Response.ok(entity).build();
     }
 
     @Path("state/{hostname}")
@@ -86,18 +82,19 @@ public class ClusterResource
     public String   remoteGetStatus(@Context UriInfo uriInfo, @PathParam("hostname") String hostname) throws Exception
     {
         return makeRemoteRequest
-        (
-            uriInfo,
-            hostname,
-            new Callable<String>()
-            {
-                @Override
-                public String call() throws Exception
+            (
+                "getStatus",
+                hostname,
+                true,
+                new Callable<String>()
                 {
-                    return getStatus();
+                    @Override
+                    public String call() throws Exception
+                    {
+                        return getStatus();
+                    }
                 }
-            }
-        );
+            );
     }
 
     @Path("set/{type}/{value}/{hostname}")
@@ -106,18 +103,21 @@ public class ClusterResource
     public String remoteSetControlPanelSetting(@Context UriInfo uriInfo, @PathParam("hostname") String hostname, final @PathParam("type") String typeStr, final @PathParam("value") boolean newValue) throws Exception
     {
         return makeRemoteRequest
-        (
-            uriInfo, 
-            hostname,
-            new Callable<String>()
-            {
-                @Override
-                public String call() throws Exception
+            (
+                "setControlPanelSetting",
+                hostname,
+                true,
+                new Callable<String>()
                 {
-                    return setControlPanelSetting(typeStr, newValue);
-                }
-            }
-        );
+                    @Override
+                    public String call() throws Exception
+                    {
+                        return setControlPanelSetting(typeStr, newValue);
+                    }
+                },
+                typeStr,
+                newValue
+            );
     }
 
     @Path("restart/{hostname}")
@@ -127,14 +127,57 @@ public class ClusterResource
     {
         return makeRemoteRequest
         (
-            uriInfo,
+            "stopStartZooKeeper",
             hostname,
+            true,
             new Callable<String>()
             {
                 @Override
                 public String call() throws Exception
                 {
                     return stopStartZooKeeper();
+                }
+            }
+        );
+    }
+
+    @Path("start/{hostname}")
+    @GET
+    @Produces(MediaType.APPLICATION_JSON)
+    public String remoteStartZooKeeper(@Context UriInfo uriInfo, @PathParam("hostname") String hostname) throws Exception
+    {
+        return makeRemoteRequest
+        (
+            "startZooKeeper",
+            hostname,
+            true,
+            new Callable<String>()
+            {
+                @Override
+                public String call() throws Exception
+                {
+                    return startZooKeeper();
+                }
+            }
+        );
+    }
+
+    @Path("stop/{hostname}")
+    @GET
+    @Produces(MediaType.APPLICATION_JSON)
+    public String remoteStopZooKeeper(@Context UriInfo uriInfo, @PathParam("hostname") String hostname) throws Exception
+    {
+        return makeRemoteRequest
+        (
+            "stopZooKeeper",
+            hostname,
+            true,
+            new Callable<String>()
+            {
+                @Override
+                public String call() throws Exception
+                {
+                    return stopZooKeeper();
                 }
             }
         );
@@ -147,7 +190,7 @@ public class ClusterResource
     {
         return makeRemoteRequest
         (
-            uriInfo,
+            "getFourLetterWord",
             hostname,
             false,
             new Callable<String>()
@@ -157,7 +200,8 @@ public class ClusterResource
                 {
                     return getFourLetterWord(word);
                 }
-            }
+            },
+            word
         );
     }
 
@@ -168,7 +212,7 @@ public class ClusterResource
     {
         return makeRemoteRequest
             (
-                uriInfo,
+                "getLog",
                 hostname,
                 false,
                 new Callable<String>()
@@ -206,7 +250,7 @@ public class ClusterResource
         }
         catch ( IllegalArgumentException e )
         {
-            return "* unknown *";
+            value = "* unknown *";
         }
 
         return JsonUtil.writeValueAsString(value);
@@ -223,12 +267,33 @@ public class ClusterResource
         return JsonUtil.writeValueAsString(result);
     }
 
+    @Path("stop")
+    @GET
+    @Produces(MediaType.APPLICATION_JSON)
+    public String stopZooKeeper() throws Exception
+    {
+        context.getExhibitor().getActivityQueue().add(QueueGroups.MAIN, new KillRunningInstance(context.getExhibitor(), false));
+
+        Result result = new Result("OK", true);
+        return JsonUtil.writeValueAsString(result);
+    }
+
+    @Path("start")
+    @GET
+    @Produces(MediaType.APPLICATION_JSON)
+    public String startZooKeeper() throws Exception
+    {
+        context.getExhibitor().getActivityQueue().add(QueueGroups.MAIN, new StartInstance(context.getExhibitor()));
+
+        Result result = new Result("OK", true);
+        return JsonUtil.writeValueAsString(result);
+    }
+
     @Path("set/{type}/{value}")
     @GET
     @Produces(MediaType.APPLICATION_JSON)
     public String setControlPanelSetting(@PathParam("type") String typeStr, @PathParam("value") boolean newValue) throws Exception
     {
-
         ControlPanelTypes   type = null;
         try
         {
@@ -266,9 +331,11 @@ public class ClusterResource
         }
         mainNode.put("switches", switchesNode);
 
-        InstanceStateTypes      state = context.getExhibitor().getMonitorRunningInstance().getCurrentInstanceState();
+        MonitorRunningInstance  monitorRunningInstance = context.getExhibitor().getMonitorRunningInstance();
+        InstanceStateTypes      state = monitorRunningInstance.getCurrentInstanceState();
         mainNode.put("state", state.getCode());
         mainNode.put("description", state.getDescription());
+        mainNode.put("isLeader", monitorRunningInstance.isCurrentlyLeader());
 
         return JsonUtil.writeValueAsString(mainNode);
     }
@@ -317,12 +384,7 @@ public class ClusterResource
         return response.toString();
     }
 
-    private String    makeRemoteRequest(UriInfo uriInfo, String hostname, Callable<String> proc) throws Exception
-    {
-        return makeRemoteRequest(uriInfo, hostname, true, proc);
-    }
-
-    private String    makeRemoteRequest(UriInfo uriInfo, String hostname, boolean responseIsJson, Callable<String> proc) throws Exception
+    private String    makeRemoteRequest(String methodName, String hostname, boolean responseIsJson, Callable<String> proc, Object... values) throws Exception
     {
         String      remoteResponse;
         String      errorMessage;
@@ -335,18 +397,11 @@ public class ClusterResource
         {
             try
             {
-                String      thisPath = uriInfo.getRequestUri().getRawPath();
-                if ( !thisPath.endsWith(hostname) )
-                {
-                    throw new IllegalStateException("Unknown path format: " + thisPath);
-                }
-                String      remotePath = thisPath.substring(0, thisPath.length() - hostname.length());
-                UriBuilder  builder = uriInfo.getRequestUriBuilder();
-                URI         remoteUri = builder.replacePath(remotePath).host(hostname).build();
+                RemoteInstanceRequest           request = new RemoteInstanceRequest(context.getExhibitor(), hostname);
+                RemoteInstanceRequest.Result    result = request.makeRequest(context.getExhibitor().getRemoteInstanceRequestClient(), methodName, values);
 
-                WebResource         resource = webResources.get(remoteUri);
-                remoteResponse = resource.accept(MediaType.APPLICATION_JSON_TYPE).get(String.class);
-                errorMessage = "";
+                remoteResponse = result.remoteResponse;
+                errorMessage = result.errorMessage;
             }
             catch ( Exception e )
             {

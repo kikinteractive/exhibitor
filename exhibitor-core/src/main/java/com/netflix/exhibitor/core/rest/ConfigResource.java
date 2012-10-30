@@ -1,31 +1,30 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.rest;
 
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Maps;
+import com.google.common.collect.Lists;
 import com.google.common.hash.Hashing;
 import com.netflix.exhibitor.core.backup.BackupConfigSpec;
 import com.netflix.exhibitor.core.config.ConfigManager;
 import com.netflix.exhibitor.core.config.EncodedConfigParser;
 import com.netflix.exhibitor.core.config.InstanceConfig;
 import com.netflix.exhibitor.core.config.IntConfigs;
+import com.netflix.exhibitor.core.config.PseudoLock;
 import com.netflix.exhibitor.core.config.StringConfigs;
 import com.netflix.exhibitor.core.entities.Result;
 import com.netflix.exhibitor.core.state.FourLetterWord;
@@ -48,15 +47,14 @@ import javax.ws.rs.ext.ContextResolver;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
-/**
- * REST calls for the general Exhibitor UI
- */
 @Path("exhibitor/v1/config")
 public class ConfigResource
 {
     private final UIContext context;
+
+    private static final String CANT_UPDATE_CONFIG_MESSAGE = "It appears that another process has updated the config. Your change was not committed.";
 
     public ConfigResource(@Context ContextResolver<UIContext> resolver)
     {
@@ -76,10 +74,12 @@ public class ConfigResource
 
         ObjectNode                  mainNode = JsonNodeFactory.instance.objectNode();
         ObjectNode                  configNode = JsonNodeFactory.instance.objectNode();
+        ObjectNode                  controlPanelNode = JsonNodeFactory.instance.objectNode();
 
         mainNode.put("version", context.getExhibitor().getVersion());
         mainNode.put("running", "imok".equals(response));
         mainNode.put("backupActive", context.getExhibitor().getBackupManager().isActive());
+        mainNode.put("standaloneMode", context.getExhibitor().getConfigManager().isStandaloneMode());
         mainNode.put("extraHeadingText", context.getExhibitor().getExtraHeadingText());
         mainNode.put("nodeMutationsAllowed", context.getExhibitor().nodeMutationsAllowed());
 
@@ -95,14 +95,17 @@ public class ConfigResource
         }
         for ( IntConfigs c : IntConfigs.values() )
         {
-            configNode.put(fixName(c), config.getInt(c));
+            String fixedName = fixName(c);
+            int value = config.getInt(c);
+
+            configNode.put(fixedName, value);
         }
 
         EncodedConfigParser     zooCfgParser = new EncodedConfigParser(config.getString(StringConfigs.ZOO_CFG_EXTRA));
         ObjectNode              zooCfgNode = JsonNodeFactory.instance.objectNode();
-        for ( Map.Entry<String, String> entry : zooCfgParser.getValues().entrySet() )
+        for ( EncodedConfigParser.FieldValue fv : zooCfgParser.getFieldValues() )
         {
-            zooCfgNode.put(entry.getKey(), entry.getValue());
+            zooCfgNode.put(fv.getField(), fv.getValue());
         }
         configNode.put("zooCfgExtra", zooCfgNode);
 
@@ -113,12 +116,13 @@ public class ConfigResource
             List<BackupConfigSpec> configs = context.getExhibitor().getBackupManager().getConfigSpecs();
             for ( BackupConfigSpec c : configs )
             {
-                String value = parser.getValues().get(c.getKey());
+                String value = parser.getValue(c.getKey());
                 backupExtraNode.put(c.getKey(), (value != null) ? value : "");
             }
             configNode.put("backupExtra", backupExtraNode);
         }
 
+        configNode.put("controlPanel", controlPanelNode);
         mainNode.put("config", configNode);
 
         String      json = JsonUtil.writeValueAsString(mainNode);
@@ -158,17 +162,30 @@ public class ConfigResource
     {
         InstanceConfig  wrapped = parseToConfig(newConfigJson);
 
-        Result  result;
+        Result  result = null;
         try
         {
-            if ( context.getExhibitor().getConfigManager().startRollingConfig(wrapped) )
+            PseudoLock  lock = context.getExhibitor().getConfigManager().newConfigBasedLock();
+            try
             {
-                result = new Result("OK", true);
+                if ( lock.lock(context.getExhibitor().getLog(), 10, TimeUnit.SECONDS) )  // TODO consider making configurable in the future
+                {
+                    if ( context.getExhibitor().getConfigManager().startRollingConfig(wrapped, null) )
+                    {
+                        result = new Result("OK", true);
+                    }
+                }
             }
-            else
+            finally
             {
-                result = new Result("Another process has updated the config.", false);  // TODO - appropriate message
+                lock.unlock();
             }
+
+            if ( result == null )
+            {
+                result = new Result("Another process has updated the config.", false);
+            }
+            context.getExhibitor().resetLocalConnection();
         }
         catch ( Exception e )
         {
@@ -183,20 +200,30 @@ public class ConfigResource
     @Produces(MediaType.APPLICATION_JSON)
     public Response setConfig(String newConfigJson) throws Exception
     {
-        // TODO - should flush caches as needed
-
         InstanceConfig wrapped = parseToConfig(newConfigJson);
-        
-        Result  result;
+
+        Result  result = null;
         try
         {
-            if ( context.getExhibitor().getConfigManager().updateConfig(wrapped) )
+            PseudoLock  lock = context.getExhibitor().getConfigManager().newConfigBasedLock();
+            try
             {
-                result = new Result("OK", true);
+                if ( lock.lock(context.getExhibitor().getLog(), 10, TimeUnit.SECONDS) )  // TODO consider making configurable in the future
+                {
+                    if ( context.getExhibitor().getConfigManager().updateConfig(wrapped) )
+                    {
+                        result = new Result("OK", true);
+                    }
+                }
             }
-            else
+            finally
             {
-                result = new Result("Another process has updated the config.", false);
+                lock.unlock();
+            }
+
+            if ( result == null )
+            {
+                result = new Result(CANT_UPDATE_CONFIG_MESSAGE, false);
             }
             context.getExhibitor().resetLocalConnection();
         }
@@ -216,26 +243,26 @@ public class ConfigResource
         String                backupExtraValue = "";
         if ( tree.get("backupExtra") != null )
         {
-            Map<String, String>     values = Maps.newHashMap();
+            List<EncodedConfigParser.FieldValue>    values = Lists.newArrayList();
             JsonNode                backupExtra = tree.get("backupExtra");
             Iterator<String> fieldNames = backupExtra.getFieldNames();
             while ( fieldNames.hasNext() )
             {
                 String      name = fieldNames.next();
                 String      value = backupExtra.get(name).getTextValue();
-                values.put(name, value);
+                values.add(new EncodedConfigParser.FieldValue(name, value));
             }
             backupExtraValue = new EncodedConfigParser(values).toEncoded();
         }
 
-        Map<String, String>     zooCfgValues = Maps.newHashMap();
+        List<EncodedConfigParser.FieldValue>    zooCfgValues = Lists.newArrayList();
         JsonNode                zooCfgExtra = tree.get("zooCfgExtra");
         Iterator<String>        fieldNames = zooCfgExtra.getFieldNames();
         while ( fieldNames.hasNext() )
         {
             String      name = fieldNames.next();
             String      value = zooCfgExtra.get(name).getTextValue();
-            zooCfgValues.put(name, value);
+            zooCfgValues.add(new EncodedConfigParser.FieldValue(name, value));
         }
         final String          zooCfgExtraValue = new EncodedConfigParser(zooCfgValues).toEncoded();
 

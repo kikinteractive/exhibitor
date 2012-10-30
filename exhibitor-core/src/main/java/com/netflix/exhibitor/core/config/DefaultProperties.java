@@ -1,33 +1,28 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.config;
 
-import com.google.common.collect.Maps;
+import com.google.common.collect.Lists;
 import com.netflix.exhibitor.core.backup.BackupConfigSpec;
 import com.netflix.exhibitor.core.backup.BackupProvider;
-import java.util.Map;
+import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
-/**
- * The default values
- */
 public class DefaultProperties
 {
     public static int asInt(String s)
@@ -74,12 +69,12 @@ public class DefaultProperties
      */
     public static InstanceConfig newDefaultInstanceConfig(BackupProvider provider)
     {
-        Map<String, String>             backupDefaultValues = Maps.newHashMap();
+        List<EncodedConfigParser.FieldValue>    backupDefaultValues = Lists.newArrayList();
         if ( provider != null )
         {
             for ( BackupConfigSpec spec : provider.getConfigs() )
             {
-                backupDefaultValues.put(spec.getKey(), spec.getDefaultValue());
+                backupDefaultValues.add(new EncodedConfigParser.FieldValue(spec.getKey(), spec.getDefaultValue()));
             }
         }
         final String                    backupExtraValue = new EncodedConfigParser(backupDefaultValues).toEncoded();
@@ -148,6 +143,17 @@ public class DefaultProperties
                     {
                         return (int)TimeUnit.MILLISECONDS.convert(1, TimeUnit.DAYS);
                     }
+
+                    case AUTO_MANAGE_INSTANCES_SETTLING_PERIOD_MS:
+                    {
+                        return (int)TimeUnit.MILLISECONDS.convert(3, TimeUnit.MINUTES);
+                    }
+
+                    case OBSERVER_THRESHOLD:
+                    {
+                        return 999;
+                    }
+
                 }
                 return 0;
             }

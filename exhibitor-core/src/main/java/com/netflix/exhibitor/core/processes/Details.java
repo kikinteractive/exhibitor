@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.processes;
@@ -39,6 +37,7 @@ class Details
 {
     final File zooKeeperDirectory;
     final File dataDirectory;
+    final File logDirectory;
     final File configDirectory;
     final String logPaths;
     final String zooKeeperJarPath;
@@ -51,6 +50,9 @@ class Details
         this.zooKeeperDirectory = getZooKeeperDirectory(config);
         this.dataDirectory = new File(config.getString(StringConfigs.ZOOKEEPER_DATA_DIRECTORY));
 
+        String      logDirectory = config.getString(StringConfigs.ZOOKEEPER_LOG_DIRECTORY);
+        this.logDirectory = (logDirectory.trim().length() > 0) ? new File(logDirectory) : this.dataDirectory;
+
         configDirectory = new File(zooKeeperDirectory, "conf");
         logPaths = findJar(new File(zooKeeperDirectory, "lib"), "(.*log4j.*)|(.*slf4j.*)");
         zooKeeperJarPath = findJar(this.zooKeeperDirectory, "zookeeper.*");
@@ -59,8 +61,12 @@ class Details
         if ( isValid() )
         {
             EncodedConfigParser     parser = new EncodedConfigParser(exhibitor.getConfigManager().getConfig().getString(StringConfigs.ZOO_CFG_EXTRA));
-            properties.putAll(parser.getValues());
-            properties.put("dataDir", dataDirectory.getPath());
+            for ( EncodedConfigParser.FieldValue fv : parser.getFieldValues() )
+            {
+                properties.setProperty(fv.getField(), fv.getValue());
+            }
+            properties.setProperty("dataDir", dataDirectory.getPath());
+            properties.setProperty("dataLogDir", this.logDirectory.getPath());
         }
     }
 
@@ -69,6 +75,7 @@ class Details
         return isValidPath(zooKeeperDirectory)
             && isValidPath(dataDirectory)
             && isValidPath(configDirectory)
+            && isValidPath(logDirectory)
             ;
     }
 

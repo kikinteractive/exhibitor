@@ -1,33 +1,26 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.state;
 
-import com.google.common.collect.Iterables;
 import com.netflix.exhibitor.core.Exhibitor;
 import com.netflix.exhibitor.core.config.InstanceConfig;
 import com.netflix.exhibitor.core.config.StringConfigs;
-import com.netflix.exhibitor.core.controlpanel.ControlPanelTypes;
 import java.util.List;
 
-/**
- * Determines the state of the ZK server
- */
 public class Checker
 {
     private final Exhibitor exhibitor;
@@ -44,34 +37,17 @@ public class Checker
         this.hostname = hostname;
     }
 
-    public InstanceStateTypes calculateState() throws Exception
+    public StateAndLeader calculateState() throws Exception
     {
         InstanceConfig          config = exhibitor.getConfigManager().getConfig();
 
         if ( !isSet(config, StringConfigs.ZOOKEEPER_DATA_DIRECTORY) || !isSet(config, StringConfigs.ZOOKEEPER_INSTALL_DIRECTORY) )
         {
-            return InstanceStateTypes.LATENT;
+            return new StateAndLeader(InstanceStateTypes.LATENT, false);
         }
 
-        InstanceStateTypes      potentialState = InstanceStateTypes.DOWN;
-        ServerList              serverList = new ServerList(config.getString(StringConfigs.SERVERS_SPEC));
-        ServerSpec              us = Iterables.find(serverList.getSpecs(), ServerList.isUs(exhibitor.getThisJVMHostname()), null);
-        if ( us != null )
-        {
-            if ( !exhibitor.getControlPanelValues().isSet(ControlPanelTypes.RESTARTS) )
-            {
-                potentialState = InstanceStateTypes.NO_RESTARTS_DOWN;
-            }
-        }
-        else
-        {
-            if ( !exhibitor.getControlPanelValues().isSet(ControlPanelTypes.UNLISTED_RESTARTS) )
-            {
-                potentialState = InstanceStateTypes.UNLISTED_DOWN;
-            }
-        }
-
-        InstanceStateTypes      actualState = potentialState;
+        InstanceStateTypes      actualState = InstanceStateTypes.DOWN;
+        boolean                 isLeader = false;
         String                  ruok = new FourLetterWord(FourLetterWord.Word.RUOK, hostname, config, exhibitor.getConnectionTimeOutMs()).getResponse();
         if ( "imok".equals(ruok) )
         {
@@ -90,12 +66,21 @@ public class Checker
                 if ( line.toLowerCase().startsWith("mode") )
                 {
                     actualState = InstanceStateTypes.SERVING;
+                    String[]        parts = line.split(":");
+                    if ( parts.length > 1 )
+                    {
+                        String mode = parts[1].trim();
+                        if ( mode.equalsIgnoreCase("leader") || mode.equalsIgnoreCase("standalone") )
+                        {
+                            isLeader = true;
+                        }
+                    }
                     break;
                 }
             }
         }
 
-        return actualState;
+        return new StateAndLeader(actualState, isLeader);
     }
 
     private boolean isSet(InstanceConfig config, StringConfigs type)

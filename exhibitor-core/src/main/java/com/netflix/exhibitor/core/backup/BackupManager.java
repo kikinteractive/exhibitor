@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.backup;
@@ -45,9 +43,6 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.zip.GZIPInputStream;
 
-/**
- * Manages backups/restores
- */
 public class BackupManager implements Closeable
 {
     private final Exhibitor exhibitor;
@@ -134,6 +129,18 @@ public class BackupManager implements Closeable
     {
         Map<String, String>       config = getBackupConfig();
         return backupProvider.get().getAvailableBackups(exhibitor, config);
+    }
+
+    /**
+     * Return a stream for the specified backup
+     *
+     * @param metaData the backup to get
+     * @return the stream or null if the stream doesn't exist
+     * @throws Exception errors
+     */
+    public BackupStream getBackupStream(BackupMetaData metaData) throws Exception
+    {
+        return backupProvider.get().getBackupStream(exhibitor, metaData, getBackupConfig());
     }
 
     /**
@@ -224,7 +231,7 @@ public class BackupManager implements Closeable
                 {
                     case SUCCEEDED:
                     {
-                        exhibitor.getLog().add(ActivityLog.Type.INFO, "Backing up: " + f);
+                        exhibitor.getLog().add(ActivityLog.Type.DEBUG, "Backing up: " + f);
                         break;
                     }
 
@@ -257,7 +264,7 @@ public class BackupManager implements Closeable
     {
         String              backupExtra = exhibitor.getConfigManager().getConfig().getString(StringConfigs.BACKUP_EXTRA);
         EncodedConfigParser encodedConfigParser = new EncodedConfigParser(backupExtra);
-        return encodedConfigParser.getValues();
+        return encodedConfigParser.getSortedMap();
     }
 
     private void doRoll(Map<String, String> config) throws Exception
@@ -268,7 +275,7 @@ public class BackupManager implements Closeable
             return;
         }
 
-        exhibitor.getLog().add(ActivityLog.Type.INFO, "Checking for elapsed backups");
+        exhibitor.getLog().add(ActivityLog.Type.DEBUG, "Checking for elapsed backups");
 
         List<BackupMetaData>        availableBackups = backupProvider.get().getAvailableBackups(exhibitor, config);
         for ( BackupMetaData backup : availableBackups )
@@ -276,7 +283,7 @@ public class BackupManager implements Closeable
             long        age = System.currentTimeMillis() - backup.getModifiedDate();
             if ( age > exhibitor.getConfigManager().getConfig().getInt(IntConfigs.BACKUP_MAX_STORE_MS) )
             {
-                exhibitor.getLog().add(ActivityLog.Type.INFO, "Cleaning backup: " + backup);
+                exhibitor.getLog().add(ActivityLog.Type.DEBUG, "Cleaning backup: " + backup);
                 backupProvider.get().deleteBackup(exhibitor, backup, config);
             }
         }

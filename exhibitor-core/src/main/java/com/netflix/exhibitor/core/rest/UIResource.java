@@ -1,19 +1,17 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.rest;
@@ -24,7 +22,6 @@ import com.google.common.collect.Lists;
 import com.google.common.io.Resources;
 import com.netflix.exhibitor.core.backup.BackupConfigSpec;
 import com.netflix.exhibitor.core.config.EncodedConfigParser;
-import com.netflix.exhibitor.core.entities.Result;
 import com.netflix.exhibitor.core.entities.UITabSpec;
 import org.codehaus.jackson.node.ArrayNode;
 import org.codehaus.jackson.node.JsonNodeFactory;
@@ -47,14 +44,16 @@ import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * REST calls for the general Exhibitor UI
- */
 @Path("exhibitor/v1/ui")
 public class UIResource
 {
     private final UIContext context;
     private final List<UITab> tabs;
+
+    private static final String     jQueryUiPrefix = "css/jquery/";
+
+    private static final String     TEXT_UI_TAB_BASE_URL = "tab/";
+    private static final String     HTML_UI_TAB_BASE_URL = "tab-html/";
 
     public UIResource(@Context ContextResolver<UIContext> resolver)
     {
@@ -66,6 +65,12 @@ public class UIResource
     @GET
     public Response getResource(@PathParam("file") String fileName) throws IOException
     {
+        if ( fileName.startsWith(jQueryUiPrefix) )
+        {
+            String      stripped = fileName.substring(jQueryUiPrefix.length());
+            fileName = "css/jquery/" + context.getExhibitor().getJQueryStyle().name().toLowerCase() + "/" + stripped;
+        }
+
         URL resource;
         try
         {
@@ -119,7 +124,8 @@ public class UIResource
                 @Override
                 public UITabSpec apply(UITab tab)
                 {
-                    return new UITabSpec(tab.getName(), "tab/" + index.getAndIncrement());
+                    String base = tab.contentIsHtml() ? HTML_UI_TAB_BASE_URL : TEXT_UI_TAB_BASE_URL;
+                    return new UITabSpec(tab.getName(), base + index.getAndIncrement(), tab.contentIsHtml());
                 }
             }
         );
@@ -129,10 +135,18 @@ public class UIResource
         return Response.ok(entity).build();
     }
 
+    @Path("tab-html/{index}")
+    @GET
+    @Produces(MediaType.TEXT_HTML)
+    public Response getAdditionalTabContent(@Context UriInfo info, @PathParam("index") int index) throws Exception
+    {
+        return getAdditionalTabHtmlContent(info, index);
+    }
+
     @Path("tab/{index}")
     @GET
     @Produces(MediaType.TEXT_PLAIN)
-    public Response getAdditionalTabContent(@Context UriInfo info, @PathParam("index") int index) throws Exception
+    public Response getAdditionalTabHtmlContent(@Context UriInfo info, @PathParam("index") int index) throws Exception
     {
         if ( (index < 0) || (index >= tabs.size()) )
         {
@@ -155,7 +169,7 @@ public class UIResource
             for ( BackupConfigSpec c : configs )
             {
                 ObjectNode      n = JsonNodeFactory.instance.objectNode();
-                String          value = parser.getValues().get(c.getKey());
+                String          value = parser.getValue(c.getKey());
 
                 n.put("key", c.getKey());
                 n.put("name", c.getDisplayName());
@@ -170,9 +184,22 @@ public class UIResource
         return JsonUtil.writeValueAsString(node);
     }
 
+    @Path("shutdown")
+    @GET
+    public Response shutdown()
+    {
+        Runnable shutdownProc = context.getExhibitor().getShutdownProc();
+        if ( shutdownProc == null )
+        {
+            return Response.status(Response.Status.NOT_FOUND).build();
+        }
+        shutdownProc.run();
+        return Response.ok().build();
+    }
+
     static String getLog(UIContext context)
     {
-        List<String> log = context.getExhibitor().getLog().toDisplayList("\t");
+        List<String> log = context.getExhibitor().getLog().toDisplayList("\t", context.getExhibitor().getLogDirection());
         StringBuilder str = new StringBuilder();
         for ( String s : log )
         {

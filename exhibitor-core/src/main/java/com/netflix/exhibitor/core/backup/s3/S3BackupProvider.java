@@ -1,36 +1,38 @@
 /*
+ * Copyright 2012 Netflix, Inc.
  *
- *  Copyright 2011 Netflix, Inc.
+ *    Licensed under the Apache License, Version 2.0 (the "License");
+ *    you may not use this file except in compliance with the License.
+ *    You may obtain a copy of the License at
  *
- *     Licensed under the Apache License, Version 2.0 (the "License");
- *     you may not use this file except in compliance with the License.
- *     You may obtain a copy of the License at
+ *        http://www.apache.org/licenses/LICENSE-2.0
  *
- *         http://www.apache.org/licenses/LICENSE-2.0
- *
- *     Unless required by applicable law or agreed to in writing, software
- *     distributed under the License is distributed on an "AS IS" BASIS,
- *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *     See the License for the specific language governing permissions and
- *     limitations under the License.
- *
+ *    Unless required by applicable law or agreed to in writing, software
+ *    distributed under the License is distributed on an "AS IS" BASIS,
+ *    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *    See the License for the specific language governing permissions and
+ *    limitations under the License.
  */
 
 package com.netflix.exhibitor.core.backup.s3;
 
-import com.amazonaws.auth.BasicAWSCredentials;
+import com.amazonaws.AmazonServiceException;
 import com.amazonaws.services.s3.model.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
+import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.io.Closeables;
 import com.google.common.io.Files;
+import com.netflix.curator.RetryLoop;
 import com.netflix.curator.RetryPolicy;
 import com.netflix.curator.retry.ExponentialBackoffRetry;
 import com.netflix.exhibitor.core.Exhibitor;
 import com.netflix.exhibitor.core.backup.BackupConfigSpec;
 import com.netflix.exhibitor.core.backup.BackupMetaData;
 import com.netflix.exhibitor.core.backup.BackupProvider;
+import com.netflix.exhibitor.core.backup.BackupStream;
 import com.netflix.exhibitor.core.s3.S3Client;
 import com.netflix.exhibitor.core.s3.S3ClientFactory;
 import com.netflix.exhibitor.core.s3.S3Credential;
@@ -38,6 +40,7 @@ import com.netflix.exhibitor.core.s3.S3Utils;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Arrays;
@@ -46,14 +49,13 @@ import java.util.Map;
 
 import static com.netflix.exhibitor.core.config.DefaultProperties.asInt;
 
-// liberally copied and modified from Priam
 public class S3BackupProvider implements BackupProvider
 {
     private final S3Client s3Client;
 
     private static final BackupConfigSpec CONFIG_THROTTLE = new BackupConfigSpec("throttle", "Throttle (bytes/ms)", "Data throttling. Maximum bytes per millisecond.", Integer.toString(1024 * 1024), BackupConfigSpec.Type.INTEGER);
     private static final BackupConfigSpec CONFIG_BUCKET = new BackupConfigSpec("bucket-name", "S3 Bucket Name", "The S3 bucket to use", "", BackupConfigSpec.Type.STRING);
-    private static final BackupConfigSpec CONFIG_KEY_PREFIX = new BackupConfigSpec("key-prefix", "S3 Key Prefix", "The prefix for S3 backup keys", "exhibitor-backup-", BackupConfigSpec.Type.STRING);
+    private static final BackupConfigSpec CONFIG_KEY_PREFIX = new BackupConfigSpec("key-prefix", "S3 Key Prefix", "The prefix for S3 backup keys", "exhibitor-backup", BackupConfigSpec.Type.STRING);
     private static final BackupConfigSpec CONFIG_MAX_RETRIES = new BackupConfigSpec("max-retries", "Max Retries", "Maximum retries when uploading/downloading S3 data", "3", BackupConfigSpec.Type.INTEGER);
     private static final BackupConfigSpec CONFIG_RETRY_SLEEP_MS = new BackupConfigSpec("retry-sleep-ms", "Retry Sleep (ms)", "Sleep time in milliseconds when retrying", "1000", BackupConfigSpec.Type.INTEGER);
 
@@ -62,7 +64,7 @@ public class S3BackupProvider implements BackupProvider
     private static final int        MIN_S3_PART_SIZE = 5 * (1024 * 1024);
 
     @VisibleForTesting
-    static final String       SEPARATOR = "|";
+    static final String       SEPARATOR = "/";
     private static final String       SEPARATOR_REPLACEMENT = "_";
 
     public S3BackupProvider(S3ClientFactory factory, S3Credential credential) throws Exception
@@ -164,22 +166,105 @@ public class S3BackupProvider implements BackupProvider
     }
 
     @Override
+    public BackupStream getBackupStream(Exhibitor exhibitor, BackupMetaData backup, Map<String, String> configValues) throws Exception
+    {
+        long            startMs = System.currentTimeMillis();
+        RetryPolicy     retryPolicy = makeRetryPolicy(configValues);
+        S3Object        object = null;
+        int             retryCount = 0;
+        while ( object == null )
+        {
+            try
+            {
+                object = s3Client.getObject(configValues.get(CONFIG_BUCKET.getKey()), toKey(backup, configValues));
+            }
+            catch ( AmazonS3Exception e)
+            {
+                if ( e.getErrorType() == AmazonServiceException.ErrorType.Client )
+                {
+                    return null;
+                }
+
+                if ( !retryPolicy.allowRetry(retryCount++, System.currentTimeMillis() - startMs, RetryLoop.getDefaultRetrySleeper()) )
+                {
+                    return null;
+                }
+            }
+        }
+
+        final Throttle      throttle = makeThrottle(configValues);
+        final InputStream   in = object.getObjectContent();
+        final InputStream   wrappedstream = new InputStream()
+        {
+            @Override
+            public void close() throws IOException
+            {
+                in.close();
+            }
+
+            @Override
+            public int read() throws IOException
+            {
+                throttle.throttle(1);
+                return in.read();
+            }
+
+            @Override
+            public int read(byte[] b) throws IOException
+            {
+                int bytesRead = in.read(b);
+                if ( bytesRead > 0 )
+                {
+                    throttle.throttle(bytesRead);
+                }
+                return bytesRead;
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException
+            {
+                int bytesRead = in.read(b, off, len);
+                if ( bytesRead > 0 )
+                {
+                    throttle.throttle(bytesRead);
+                }
+                return bytesRead;
+            }
+        };
+
+        return new BackupStream()
+        {
+            @Override
+            public InputStream getStream()
+            {
+                return wrappedstream;
+            }
+
+            @Override
+            public void close() throws IOException
+            {
+                in.close();
+            }
+        };
+    }
+
+    @Override
     public void downloadBackup(Exhibitor exhibitor, BackupMetaData backup, OutputStream destination, Map<String, String> configValues) throws Exception
     {
-        S3Object        object = s3Client.getObject(configValues.get(CONFIG_BUCKET.getKey()), toKey(backup, configValues));
-
         byte[]          buffer = new byte[MIN_S3_PART_SIZE];
 
         long            startMs = System.currentTimeMillis();
         RetryPolicy     retryPolicy = makeRetryPolicy(configValues);
         int             retryCount = 0;
         boolean         done = false;
+
         while ( !done )
         {
             Throttle            throttle = makeThrottle(configValues);
             InputStream         in = null;
             try
             {
+                S3Object            object = s3Client.getObject(configValues.get(CONFIG_BUCKET.getKey()), toKey(backup, configValues));
                 in = object.getObjectContent();
 
                 for(;;)
@@ -198,7 +283,7 @@ public class S3BackupProvider implements BackupProvider
             }
             catch ( Exception e )
             {
-                if ( !retryPolicy.allowRetry(retryCount++, System.currentTimeMillis() - startMs) )
+                if ( !retryPolicy.allowRetry(retryCount++, System.currentTimeMillis() - startMs, RetryLoop.getDefaultRetrySleeper()) )
                 {
                     done = true;
                 }
@@ -225,21 +310,34 @@ public class S3BackupProvider implements BackupProvider
         do
         {
             listing = (listing == null) ? s3Client.listObjects(request) : s3Client.listNextBatchOfObjects(listing);
-            completeList.addAll
+
+            Iterable<S3ObjectSummary> filtered = Iterables.filter
             (
-                Lists.transform
-                (
-                    listing.getObjectSummaries(),
-                    new Function<S3ObjectSummary, BackupMetaData>()
+                listing.getObjectSummaries(),
+                new Predicate<S3ObjectSummary>()
+                {
+                    @Override
+                    public boolean apply(S3ObjectSummary summary)
                     {
-                        @Override
-                        public BackupMetaData apply(S3ObjectSummary summary)
-                        {
-                            return fromKey(summary.getKey());
-                        }
+                        return fromKey(summary.getKey()) != null;
                     }
-                )
+                }
             );
+
+            Iterable<BackupMetaData> transformed = Iterables.transform
+            (
+                filtered,
+                new Function<S3ObjectSummary, BackupMetaData>()
+                {
+                    @Override
+                    public BackupMetaData apply(S3ObjectSummary summary)
+                    {
+                        return fromKey(summary.getKey());
+                    }
+                }
+            );
+
+            completeList.addAll(Lists.newArrayList(transformed));
         } while ( listing.isTruncated() );
         return completeList;
     }
@@ -279,7 +377,7 @@ public class S3BackupProvider implements BackupProvider
             }
             catch ( Exception e )
             {
-                if ( !retryPolicy.allowRetry(retries++, System.currentTimeMillis() - startMs) )
+                if ( !retryPolicy.allowRetry(retries++, System.currentTimeMillis() - startMs, RetryLoop.getDefaultRetrySleeper()) )
                 {
                     throw e;
                 }
@@ -290,7 +388,7 @@ public class S3BackupProvider implements BackupProvider
     private PartETag uploadChunk(byte[] buffer, int bytesRead, InitiateMultipartUploadResult initResponse, int index) throws Exception
     {
         byte[]          md5 = S3Utils.md5(buffer, bytesRead);
-        
+
         UploadPartRequest   request = new UploadPartRequest();
         request.setBucketName(initResponse.getBucketName());
         request.setKey(initResponse.getKey());
@@ -306,7 +404,7 @@ public class S3BackupProvider implements BackupProvider
         {
             throw new Exception("Unable to match MD5 for part " + index);
         }
-        
+
         return partETag;
     }
 
@@ -345,9 +443,13 @@ public class S3BackupProvider implements BackupProvider
         return prefix;
     }
 
-    private BackupMetaData fromKey(String key)
+    private static BackupMetaData fromKey(String key)
     {
         String[]        parts = key.split("\\" + SEPARATOR);
+        if ( parts.length != 3 )
+        {
+            return null;
+        }
         return new BackupMetaData(parts[1], Long.parseLong(parts[2]));
     }
 }
