@@ -39,12 +39,12 @@ case "$1" in
         echo -n "Starting Exhibitor ..."
         
         if [ ! -f $EXHIBITOR_LOG_FILE ]; then 
-            mkdir $(dirname $EXHIBITOR_LOG_FILE) > /dev/null 2>$1
-            chown $EXHIBITOR_USER:$EXHIBITOR_USER $(dirname $EXHIBITOR_LOG_FILE) > /dev/null 2>$1
+            mkdir $(dirname $EXHIBITOR_LOG_FILE) > /dev/null 2>&1
+            chown $EXHIBITOR_USER:$EXHIBITOR_USER $(dirname $EXHIBITOR_LOG_FILE) > /dev/null 2>&1
         fi
         
         # retrieving pid of the parent process
-        /bin/su -l "$EXHIBITOR_USER" --shel=/bin/bash -c "$JAVA_CMD $PARAMS 2> $EXHIBITOR_LOG_FILE &"
+        /bin/su -l "$EXHIBITOR_USER" --shel=/bin/bash -c "$JAVA_CMD $PARAMS 2>&1 $EXHIBITOR_LOG_FILE &"
         echo $(jps | grep ExhibitorMain | awk '{print $1}') > "$EXHIBITOR_PID"
         if [ $? == "0" ]; then
             success 
