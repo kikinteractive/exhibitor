@@ -44,7 +44,7 @@ case "$1" in
         fi
         
         # retrieving pid of the parent process
-        /bin/su -l "$EXHIBITOR_USER" --shel=/bin/bash -c "$JAVA_CMD $PARAMS 2>&1 $EXHIBITOR_LOG_FILE &"
+        /bin/su -l "$EXHIBITOR_USER" --shel=/bin/bash -c "$JAVA_CMD $PARAMS > $EXHIBITOR_LOG_FILE 2>&1 &"
         echo $(jps | grep ExhibitorMain | awk '{print $1}') > "$EXHIBITOR_PID"
         if [ $? == "0" ]; then
             success 
