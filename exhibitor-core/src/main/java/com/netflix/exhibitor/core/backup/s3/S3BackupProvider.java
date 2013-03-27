@@ -36,6 +36,7 @@ import com.netflix.exhibitor.core.backup.BackupStream;
 import com.netflix.exhibitor.core.s3.S3Client;
 import com.netflix.exhibitor.core.s3.S3ClientFactory;
 import com.netflix.exhibitor.core.s3.S3Credential;
+import com.netflix.exhibitor.core.s3.S3CredentialsProvider;
 import com.netflix.exhibitor.core.s3.S3Utils;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -67,9 +68,26 @@ public class S3BackupProvider implements BackupProvider
     static final String       SEPARATOR = "/";
     private static final String       SEPARATOR_REPLACEMENT = "_";
 
-    public S3BackupProvider(S3ClientFactory factory, S3Credential credential) throws Exception
+    /**
+     * @param factory the factory
+     * @param credential credentials
+     * @param s3Region optional region or null
+     * @throws Exception errors
+     */
+    public S3BackupProvider(S3ClientFactory factory, S3Credential credential, String s3Region) throws Exception
     {
-        s3Client = factory.makeNewClient(credential);
+        s3Client = factory.makeNewClient(credential, s3Region);
+    }
+
+    /**
+     * @param factory the factory
+     * @param credentialsProvider credentials
+     * @param s3Region optional region or null
+     * @throws Exception errors
+     */
+    public S3BackupProvider(S3ClientFactory factory, S3CredentialsProvider credentialsProvider, String s3Region) throws Exception
+    {
+        s3Client = factory.makeNewClient(credentialsProvider, s3Region);
     }
 
     public S3Client getS3Client()

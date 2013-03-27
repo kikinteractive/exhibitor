@@ -25,10 +25,8 @@ import com.netflix.exhibitor.core.config.ConfigProvider;
 import com.netflix.exhibitor.core.config.LoadedInstanceConfig;
 import com.netflix.exhibitor.core.config.PropertyBasedInstanceConfig;
 import com.netflix.exhibitor.core.config.PseudoLock;
-import com.netflix.exhibitor.core.s3.S3Client;
-import com.netflix.exhibitor.core.s3.S3ClientFactory;
-import com.netflix.exhibitor.core.s3.S3Credential;
-import com.netflix.exhibitor.core.s3.S3Utils;
+import com.netflix.exhibitor.core.s3.*;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Date;
@@ -41,17 +39,50 @@ public class S3ConfigProvider implements ConfigProvider
     private final String hostname;
     private final Properties defaults;
 
-    public S3ConfigProvider(S3ClientFactory factory, S3Credential credential, S3ConfigArguments arguments, String hostname) throws Exception
+    /**
+     * @param factory the factory
+     * @param credential credentials
+     * @param arguments args
+     * @param hostname this VM's hostname
+     * @param s3Region optional region or null
+     * @throws Exception errors
+     */
+    public S3ConfigProvider(S3ClientFactory factory, S3Credential credential, S3ConfigArguments arguments, String hostname, String s3Region) throws Exception
     {
-        this(factory, credential, arguments, hostname, new Properties());
+        this(factory, credential, arguments, hostname, new Properties(), s3Region);
     }
 
-    public S3ConfigProvider(S3ClientFactory factory, S3Credential credential, S3ConfigArguments arguments, String hostname, Properties defaults) throws Exception
+    /**
+     * @param factory the factory
+     * @param credential credentials
+     * @param arguments args
+     * @param hostname this VM's hostname
+     * @param defaults default props
+     * @param s3Region optional region or null
+     * @throws Exception errors
+     */
+    public S3ConfigProvider(S3ClientFactory factory, S3Credential credential, S3ConfigArguments arguments, String hostname, Properties defaults, String s3Region) throws Exception
     {
         this.arguments = arguments;
         this.hostname = hostname;
         this.defaults = defaults;
-        s3Client = factory.makeNewClient(credential);
+        s3Client = factory.makeNewClient(credential, s3Region);
+    }
+
+    /**
+     * @param factory the factory
+     * @param credentialsProvider credentials
+     * @param arguments args
+     * @param hostname this VM's hostname
+     * @param s3Region optional region or null
+     * @throws Exception errors
+     */
+    public S3ConfigProvider(S3ClientFactory factory, S3CredentialsProvider credentialsProvider, S3ConfigArguments arguments, String hostname, Properties defaults, String s3Region) throws Exception
+    {
+        this.arguments = arguments;
+        this.hostname = hostname;
+        this.defaults = defaults;
+        s3Client = factory.makeNewClient(credentialsProvider, s3Region);
     }
 
     public S3Client getS3Client()

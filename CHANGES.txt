@@ -1,7 +1,53 @@
-1.4.3 - xxxxxxxxxxxxxxxx
-========================
+1.4.7 - March 13, 2013
+======================
+* Issue 120: Fixed possible NPE during indexing.
+
+1.4.6 - February 18, 2013
+=========================
+* Issue 106: Disable Chrome textarea resizing in the modify node dialog.
+
+* Issue 105: Exhibitor did not prevent users from setting 0 (or a negative number) for config values
+such as Live Check. If you did, it would cause those features to turn off. Now, a minimum value is
+enforced internally for all such time values.
+
+* Curator 1.3.2
+
+* Issue 112: WAR creation was mostly broken. Fixed everything and added a filter that redirects / to the
+main page. Also, System properties can now be set in addition to the properties file.
+
+* Issue 116: Added a note in the UI that Exhibitor stays latent until the ZK paths are set.
+
+* Issue 115: Fixed an incorrect error message when configtype is zookeeper.
+
+* Authentication/Security/Authorization has been totally reworked. See details here
+https://github.com/Netflix/exhibitor/wiki/Authentication-Setup and here
+https://github.com/Netflix/exhibitor/wiki/Remote-Client-Authorization. NOTE: --basicauthrealm,
+--consoleuser, --curatoruser, --consolepassword and --curatorpassword are now deprecated.
+
+1.4.5 - January 9, 2013
+=======================
+* Issue 103: S3 buckets outside of us-east-1 now require an "endpoint" to be set. For the standalone
+version, use the new CLI --s3region <region>. e.g. "--s3region eu-west-1".
+
+1.4.4 - January 2, 2013
+=======================
+* Issue 94: The standalone version now has a CLI option to load default ZK/Exhibitor config
+values. Details here (see --defaultconfig): https://github.com/Netflix/exhibitor/wiki/Running-Exhibitor
+
+* Issue 97: There appear to be some bugs in the JDK with the Preferences API which Exhibitor uses
+for Control Panel values, etc. There is now an option to provide an alternate file path to use so
+as to work around this. For the standalone version use "--prefspath".
+
+* Issue 98: IE 8 and below don't support Date.now().
+
+1.4.3 - November 26, 2012
+=========================
 * There was no way to specify Exhibitor port (and REST path) values when using ZooKeeper
 as a config provider.
+
+* Added UI widget to open a view on a given instance.
+
+* Depend on ZooKeeper 3.4.5
 
 1.4.2 - October 22, 2012
 ========================

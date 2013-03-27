@@ -16,7 +16,10 @@
 
 package com.netflix.exhibitor.standalone;
 
+import com.google.common.base.Joiner;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Sets;
+import com.google.common.io.Closeables;
 import com.netflix.curator.ensemble.exhibitor.DefaultExhibitorRestClient;
 import com.netflix.curator.ensemble.exhibitor.ExhibitorEnsembleProvider;
 import com.netflix.curator.ensemble.exhibitor.Exhibitors;
@@ -31,7 +34,10 @@ import com.netflix.exhibitor.core.backup.s3.S3BackupProvider;
 import com.netflix.exhibitor.core.config.AutoManageLockArguments;
 import com.netflix.exhibitor.core.config.ConfigProvider;
 import com.netflix.exhibitor.core.config.DefaultProperties;
+import com.netflix.exhibitor.core.config.IntConfigs;
 import com.netflix.exhibitor.core.config.JQueryStyle;
+import com.netflix.exhibitor.core.config.PropertyBasedInstanceConfig;
+import com.netflix.exhibitor.core.config.StringConfigs;
 import com.netflix.exhibitor.core.config.filesystem.FileSystemConfigProvider;
 import com.netflix.exhibitor.core.config.none.NoneConfigProvider;
 import com.netflix.exhibitor.core.config.s3.S3ConfigArguments;
@@ -59,12 +65,16 @@ import org.mortbay.jetty.security.HashUserRealm;
 import org.mortbay.jetty.security.SecurityHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.io.BufferedInputStream;
 import java.io.Closeable;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 import static com.netflix.exhibitor.standalone.ExhibitorCLI.*;
 
@@ -78,6 +88,9 @@ public class ExhibitorCreator
     private final ConfigProvider configProvider;
     private final int httpPort;
     private final List<Closeable> closeables = Lists.newArrayList();
+    private final String securityFile;
+    private final String realmSpec;
+    private final String remoteAuthSpec;
 
     public ExhibitorCreator(String[] args) throws Exception
     {
@@ -104,7 +117,8 @@ public class ExhibitorCreator
 
         checkMutuallyExclusive(cli, commandLine, S3_BACKUP, FILESYSTEMBACKUP);
 
-        PropertyBasedS3Credential awsCredentials = null;
+        String                      s3Region = commandLine.getOptionValue(S3_REGION, null);
+        PropertyBasedS3Credential   awsCredentials = null;
         if ( commandLine.hasOption(S3_CREDENTIALS) )
         {
             awsCredentials = new PropertyBasedS3Credential(new File(commandLine.getOptionValue(S3_CREDENTIALS)));
@@ -113,7 +127,7 @@ public class ExhibitorCreator
         BackupProvider backupProvider = null;
         if ( "true".equalsIgnoreCase(commandLine.getOptionValue(S3_BACKUP)) )
         {
-            backupProvider = new S3BackupProvider(new S3ClientFactoryImpl(), awsCredentials);
+            backupProvider = new S3BackupProvider(new S3ClientFactoryImpl(), awsCredentials, s3Region);
         }
         else if ( "true".equalsIgnoreCase(commandLine.getOptionValue(FILESYSTEMBACKUP)) )
         {
@@ -134,7 +148,7 @@ public class ExhibitorCreator
             throw new MissingConfigurationTypeException("Configuration type (-" + SHORT_CONFIG_TYPE + " or --" + CONFIG_TYPE + ") must be specified", cli);
         }
 
-        ConfigProvider configProvider = makeConfigProvider(configType, cli, commandLine, awsCredentials, backupProvider, useHostname);
+        ConfigProvider configProvider = makeConfigProvider(configType, cli, commandLine, awsCredentials, backupProvider, useHostname, s3Region);
         if ( configProvider == null )
         {
             throw new ExhibitorCreatorExit(cli);
@@ -155,6 +169,10 @@ public class ExhibitorCreator
             throw new ExhibitorCreatorExit(cli);
         }
 
+        securityFile = commandLine.getOptionValue(SECURITY_FILE);
+        realmSpec = commandLine.getOptionValue(REALM);
+        remoteAuthSpec = commandLine.getOptionValue(REMOTE_CLIENT_AUTHORIZATION);
+
         String realm = commandLine.getOptionValue(BASIC_AUTH_REALM);
         String user = commandLine.getOptionValue(CONSOLE_USER);
         String password = commandLine.getOptionValue(CONSOLE_PASSWORD);
@@ -163,7 +181,8 @@ public class ExhibitorCreator
         SecurityHandler handler = null;
         if ( notNullOrEmpty(realm) && notNullOrEmpty(user) && notNullOrEmpty(password) && notNullOrEmpty(curatorUser) && notNullOrEmpty(curatorPassword) )
         {
-            handler = getSecurityHandler(realm, user, password, curatorUser, curatorPassword);
+            log.warn(Joiner.on(", ").join(BASIC_AUTH_REALM, CONSOLE_USER, CONSOLE_PASSWORD, CURATOR_USER, CURATOR_PASSWORD) + " - have been deprecated. Use TBD instead");
+            handler = makeSecurityHandler(realm, user, password, curatorUser, curatorPassword);
         }
 
         String      aclId = commandLine.getOptionValue(ACL_ID);
@@ -185,6 +204,8 @@ public class ExhibitorCreator
             servoRegistration = new ServoRegistration(new JmxMonitorRegistry("exhibitor"), 60000);
         }
 
+        String              preferencesPath = commandLine.getOptionValue(PREFERENCES_PATH);
+
         this.builder = ExhibitorArguments.builder()
             .connectionTimeOutMs(timeoutMs)
             .logWindowSizeLines(logWindowSizeLines)
@@ -196,6 +217,7 @@ public class ExhibitorCreator
             .restPort(httpPort)
             .aclProvider(aclProvider)
             .servoRegistration(servoRegistration)
+            .preferencesPath(preferencesPath)
         ;
 
         this.securityHandler = handler;
@@ -234,25 +256,42 @@ public class ExhibitorCreator
         return closeables;
     }
 
-    private ConfigProvider makeConfigProvider(String configType, ExhibitorCLI cli, CommandLine commandLine, PropertyBasedS3Credential awsCredentials, BackupProvider backupProvider, String useHostname) throws Exception
+    public String getSecurityFile()
     {
+        return securityFile;
+    }
+
+    public String getRealmSpec()
+    {
+        return realmSpec;
+    }
+
+    public String getRemoteAuthSpec()
+    {
+        return remoteAuthSpec;
+    }
+
+    private ConfigProvider makeConfigProvider(String configType, ExhibitorCLI cli, CommandLine commandLine, PropertyBasedS3Credential awsCredentials, BackupProvider backupProvider, String useHostname, String s3Region) throws Exception
+    {
+        Properties          defaultProperties = makeDefaultProperties(commandLine, backupProvider);
+
         ConfigProvider      configProvider;
         if ( configType.equals("s3") )
         {
-            configProvider = getS3Provider(cli, commandLine, awsCredentials, useHostname);
+            configProvider = getS3Provider(cli, commandLine, awsCredentials, useHostname, defaultProperties, s3Region);
         }
         else if ( configType.equals("file") )
         {
-            configProvider = getFileSystemProvider(commandLine, backupProvider);
+            configProvider = getFileSystemProvider(commandLine, defaultProperties);
         }
         else if ( configType.equals("zookeeper") )
         {
-            configProvider = getZookeeperProvider(commandLine, useHostname);
+            configProvider = getZookeeperProvider(commandLine, useHostname, defaultProperties);
         }
         else if ( configType.equals("none") )
         {
             log.warn("Warning: you have intentionally turned off shared configuration. This mode is meant for special purposes only. Please verify that this is your intent.");
-            configProvider = getNoneProvider(commandLine);
+            configProvider = getNoneProvider(commandLine, defaultProperties);
         }
         else
         {
@@ -262,7 +301,51 @@ public class ExhibitorCreator
         return configProvider;
     }
 
-    private ConfigProvider getNoneProvider(CommandLine commandLine)
+    private Properties makeDefaultProperties(CommandLine commandLine, BackupProvider backupProvider) throws IOException
+    {
+        Properties          defaultProperties = new Properties();
+        String              defaultConfigFile = commandLine.getOptionValue(INITIAL_CONFIG_FILE);
+        if ( defaultConfigFile != null )
+        {
+            InputStream in = new BufferedInputStream(new FileInputStream(defaultConfigFile));
+            try
+            {
+                defaultProperties.load(in);
+            }
+            finally
+            {
+                Closeables.closeQuietly(in);
+            }
+        }
+
+        Set<String>         propertyNames = Sets.newHashSet();
+        for ( StringConfigs config : StringConfigs.values() )
+        {
+            propertyNames.add(PropertyBasedInstanceConfig.toName(config, ""));
+        }
+        for ( IntConfigs config : IntConfigs.values() )
+        {
+            propertyNames.add(PropertyBasedInstanceConfig.toName(config, ""));
+        }
+
+        Properties          fixedDefaultProperties = new Properties();
+        for ( String name : defaultProperties.stringPropertyNames() )
+        {
+            if ( propertyNames.contains(name) )
+            {
+                String value = defaultProperties.getProperty(name);
+                fixedDefaultProperties.setProperty(PropertyBasedInstanceConfig.ROOT_PROPERTY_PREFIX + name, value);
+            }
+            else
+            {
+                log.warn("Ignoring unknown config: " + name);
+            }
+        }
+
+        return new PropertyBasedInstanceConfig(fixedDefaultProperties, DefaultProperties.get(backupProvider)).getProperties();
+    }
+
+    private ConfigProvider getNoneProvider(CommandLine commandLine, Properties defaultProperties)
     {
         if ( !commandLine.hasOption(NONE_CONFIG_DIRECTORY) )
         {
@@ -270,17 +353,17 @@ public class ExhibitorCreator
             return null;
         }
 
-        return new NoneConfigProvider(commandLine.getOptionValue(NONE_CONFIG_DIRECTORY));
+        return new NoneConfigProvider(commandLine.getOptionValue(NONE_CONFIG_DIRECTORY), defaultProperties);
     }
 
-    private ConfigProvider getZookeeperProvider(CommandLine commandLine, String useHostname) throws Exception
+    private ConfigProvider getZookeeperProvider(CommandLine commandLine, String useHostname, Properties defaultProperties) throws Exception
     {
         String      connectString = commandLine.getOptionValue(ZOOKEEPER_CONFIG_INITIAL_CONNECT_STRING);
         String      path = commandLine.getOptionValue(ZOOKEEPER_CONFIG_BASE_PATH);
         String      retrySpec = commandLine.getOptionValue(ZOOKEEPER_CONFIG_RETRY, DEFAULT_ZOOKEEPER_CONFIG_RETRY);
         if ( (path == null) || (connectString == null) )
         {
-            log.error("Both " + ZOOKEEPER_CONFIG_INITIAL_CONNECT_STRING + " and " + ZOOKEEPER_CONFIG_INITIAL_CONNECT_STRING + " are required when the configtype is zookeeper");
+            log.error("Both " + ZOOKEEPER_CONFIG_INITIAL_CONNECT_STRING + " and " + ZOOKEEPER_CONFIG_BASE_PATH + " are required when the configtype is zookeeper");
             return null;
         }
 
@@ -345,7 +428,7 @@ public class ExhibitorCreator
 
         client.start();
         closeables.add(client);
-        return new ZookeeperConfigProvider(client, path, new Properties(), useHostname);
+        return new ZookeeperConfigProvider(client, path, defaultProperties, useHostname);
     }
 
     private ACLProvider getAclProvider(ExhibitorCLI cli, String aclId, String aclScheme, String aclPerms) throws ExhibitorCreatorExit
@@ -415,18 +498,18 @@ public class ExhibitorCreator
         };
     }
 
-    private ConfigProvider getFileSystemProvider(CommandLine commandLine, BackupProvider backupProvider) throws IOException
+    private ConfigProvider getFileSystemProvider(CommandLine commandLine, Properties defaultProperties) throws IOException
     {
         File directory = commandLine.hasOption(FILESYSTEM_CONFIG_DIRECTORY) ? new File(commandLine.getOptionValue(FILESYSTEM_CONFIG_DIRECTORY)) : new File(System.getProperty("user.dir"));
         String name = commandLine.hasOption(FILESYSTEM_CONFIG_NAME) ? commandLine.getOptionValue(FILESYSTEM_CONFIG_NAME) : DEFAULT_FILESYSTEMCONFIG_NAME;
         String lockPrefix = commandLine.hasOption(FILESYSTEM_CONFIG_LOCK_PREFIX) ? commandLine.getOptionValue(FILESYSTEM_CONFIG_LOCK_PREFIX) : DEFAULT_FILESYSTEMCONFIG_LOCK_PREFIX;
-        return new FileSystemConfigProvider(directory, name, DefaultProperties.get(backupProvider), new AutoManageLockArguments(lockPrefix));
+        return new FileSystemConfigProvider(directory, name, defaultProperties, new AutoManageLockArguments(lockPrefix));
     }
 
-    private ConfigProvider getS3Provider(ExhibitorCLI cli, CommandLine commandLine, PropertyBasedS3Credential awsCredentials, String hostname) throws Exception
+    private ConfigProvider getS3Provider(ExhibitorCLI cli, CommandLine commandLine, PropertyBasedS3Credential awsCredentials, String hostname, Properties defaultProperties, String s3Region) throws Exception
     {
         String  prefix = cli.getOptions().hasOption(S3_CONFIG_PREFIX) ? commandLine.getOptionValue(S3_CONFIG_PREFIX) : DEFAULT_PREFIX;
-        return new S3ConfigProvider(new S3ClientFactoryImpl(), awsCredentials, getS3Arguments(cli, commandLine.getOptionValue(S3_CONFIG), prefix), hostname);
+        return new S3ConfigProvider(new S3ClientFactoryImpl(), awsCredentials, getS3Arguments(cli, commandLine.getOptionValue(S3_CONFIG), prefix), hostname, defaultProperties, s3Region);
     }
 
     private void checkMutuallyExclusive(ExhibitorCLI cli, CommandLine commandLine, String option1, String option2) throws ExhibitorCreatorExit
@@ -505,9 +588,8 @@ public class ExhibitorCreator
         return arg != null && (! "".equals(arg));
     }
 
-    private SecurityHandler getSecurityHandler(String realm, String consoleUser, String consolePassword, String curatorUser, String curatorPassword)
+    private SecurityHandler makeSecurityHandler(String realm, String consoleUser, String consolePassword, String curatorUser, String curatorPassword)
     {
-
         HashUserRealm userRealm = new HashUserRealm(realm);
         userRealm.put(consoleUser, Credential.getCredential(consolePassword));
         userRealm.addUserToRole(consoleUser,"console");

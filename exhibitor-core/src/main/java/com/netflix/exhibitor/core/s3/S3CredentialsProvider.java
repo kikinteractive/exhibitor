@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 Netflix, Inc.
+ * Copyright 2012 Netflix, Inc.
  *
  *    Licensed under the Apache License, Version 2.0 (the "License");
  *    you may not use this file except in compliance with the License.
@@ -14,21 +14,12 @@
  *    limitations under the License.
  */
 
-package com.netflix.exhibitor.core.activity;
+package com.netflix.exhibitor.core.s3;
 
-import java.io.Closeable;
 
-public interface RepeatingActivity extends Closeable
+import com.amazonaws.auth.AWSCredentialsProvider;
+
+public interface S3CredentialsProvider
 {
-    /**
-     * Must be started
-     */
-    public void start();
-
-    /**
-     * Change the time period between executions
-     *
-     * @param newTimePeriodMs new time period
-     */
-    public void setTimePeriodMs(long newTimePeriodMs);
+    public AWSCredentialsProvider getAWSCredentialProvider();
 }

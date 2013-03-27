@@ -21,7 +21,10 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.netflix.exhibitor.core.Exhibitor;
+import com.netflix.exhibitor.core.config.IntConfigs;
 import com.netflix.exhibitor.core.config.JQueryStyle;
+import com.netflix.exhibitor.core.config.PropertyBasedInstanceConfig;
+import com.netflix.exhibitor.core.config.StringConfigs;
 import com.netflix.exhibitor.core.s3.PropertyBasedS3Credential;
 import com.netflix.exhibitor.core.state.ManifestVersion;
 import org.apache.commons.cli.HelpFormatter;
@@ -56,6 +59,7 @@ public class ExhibitorCLI
 
     public static final String CONFIG_TYPE = "configtype";
     public static final String SHORT_CONFIG_TYPE = "c";
+    public static final String PREFERENCES_PATH = "prefspath";
 
     public static final String FILESYSTEM_CONFIG_DIRECTORY = "fsconfigdir";
     public static final String FILESYSTEM_CONFIG_NAME = "fsconfigname";
@@ -64,6 +68,7 @@ public class ExhibitorCLI
     public static final String S3_BACKUP = "s3backup";
     public static final String S3_CONFIG = "s3config";
     public static final String S3_CONFIG_PREFIX = "s3configprefix";
+    public static final String S3_REGION = "s3region";
     public static final String ZOOKEEPER_CONFIG_INITIAL_CONNECT_STRING = "zkconfigconnect";
     public static final String ZOOKEEPER_CONFIG_EXHIBITOR_PORT = "zkconfigexhibitorport";
     public static final String ZOOKEEPER_CONFIG_EXHIBITOR_URI_PATH = "zkconfigexhibitorpath";
@@ -71,6 +76,7 @@ public class ExhibitorCLI
     public static final String ZOOKEEPER_CONFIG_RETRY = "zkconfigretry";
     public static final String ZOOKEEPER_CONFIG_POLLING = "zkconfigpollms";
     public static final String NONE_CONFIG_DIRECTORY = "noneconfigdir";
+    public static final String INITIAL_CONFIG_FILE = "defaultconfig";
 
     public static final String FILESYSTEMBACKUP = "filesystembackup";
     public static final String TIMEOUT = "timeout";
@@ -83,15 +89,20 @@ public class ExhibitorCLI
     public static final String EXTRA_HEADING_TEXT = "headingtext";
     public static final String NODE_MUTATIONS = "nodemodification";
     public static final String JQUERY_STYLE = "jquerystyle";
+    public static final String ACL_SCHEME = "aclscheme";
+    public static final String ACL_ID = "aclid";
+    public static final String ACL_PERMISSIONS = "aclperms";
+    public static final String SERVO_INTEGRATION = "servo";
+
+    public static final String SECURITY_FILE = "security";
+    public static final String REALM = "realm";
+    public static final String REMOTE_CLIENT_AUTHORIZATION = "remoteauth";
+
     public static final String BASIC_AUTH_REALM = "basicauthrealm";
     public static final String CONSOLE_USER = "consoleuser";
     public static final String CURATOR_USER = "curatoruser";
     public static final String CONSOLE_PASSWORD = "consolepassword";
     public static final String CURATOR_PASSWORD = "curatorpassword";
-    public static final String ACL_SCHEME = "aclscheme";
-    public static final String ACL_ID = "aclid";
-    public static final String ACL_PERMISSIONS = "aclperms";
-    public static final String SERVO_INTEGRATION = "servo";
 
     public static final String DEFAULT_FILESYSTEMCONFIG_NAME = "exhibitor.properties";
     public static final String DEFAULT_PREFIX = "exhibitor-";
@@ -104,12 +115,17 @@ public class ExhibitorCLI
     {
         hostname = Exhibitor.getHostname();
 
+        Options deprecatedAuthOptions = new Options();
+        deprecatedAuthOptions.addOption(null, BASIC_AUTH_REALM, true, "Basic Auth Realm to Protect the Exhibitor UI (DEPRECATED - use --" + SECURITY_FILE + "/--" + REALM + " instead)");
+        deprecatedAuthOptions.addOption(null, CONSOLE_USER, true, "Basic Auth Username to Protect the Exhibitor UI (DEPRECATED - use --" + SECURITY_FILE + "/--" + REALM + " instead)");
+        deprecatedAuthOptions.addOption(null, CONSOLE_PASSWORD, true, "Basic Auth Password to Protect the Exhibitor UI (DEPRECATED - use --" + SECURITY_FILE + "/--" + REALM + " instead)");
+        deprecatedAuthOptions.addOption(null, CURATOR_USER, true, "Basic Auth Password to Protect the cluster list api (DEPRECATED - use --" + SECURITY_FILE + "/--" + REALM + " instead)");
+        deprecatedAuthOptions.addOption(null, CURATOR_PASSWORD, true, "Basic Auth Password to Protect cluster list api (DEPRECATED - use --" + SECURITY_FILE + "/--" + REALM + " instead)");
+
         Options authOptions = new Options();
-        authOptions.addOption(null, BASIC_AUTH_REALM, true, "Basic Auth Realm to Protect the Exhibitor UI");
-        authOptions.addOption(null, CONSOLE_USER, true, "Basic Auth Username to Protect the Exhibitor UI");
-        authOptions.addOption(null, CONSOLE_PASSWORD, true, "Basic Auth Password to Protect the Exhibitor UI");
-        authOptions.addOption(null, CURATOR_USER, true, "Basic Auth Password to Protect the cluster list api");
-        authOptions.addOption(null, CURATOR_PASSWORD, true, "Basic Auth Password to Protect cluster list api");
+        authOptions.addOption(null, SECURITY_FILE, true, "Path to a web.xml file with security information (all other tags are ignored). See http://docs.oracle.com/javaee/6/tutorial/doc/gkbaa.html.");
+        authOptions.addOption(null, REALM, true, "Specifies the realm as [realm name]:[path/url]. The path/url must point to a realm properties file as described here (see HashUserRealm): http://docs.codehaus.org/display/JETTY/Realms");
+        authOptions.addOption(null, REMOTE_CLIENT_AUTHORIZATION, true, "Exhibitor uses the Jersey Client to remotely connect to each Exhibitor instance in the ensemble. If you have security enabled for Exhibitor you also need to specify authorization for the remote client. The argument for " + REMOTE_CLIENT_AUTHORIZATION + " is: <type>:<realm-user>. \"type\" must be either \"basic\" or \"digest\". \"realm-user\" is the user to use from the realm file.");
 
         Options fileConfigOptions = new Options();
         fileConfigOptions.addOption(null, FILESYSTEM_CONFIG_DIRECTORY, true, "Directory to store Exhibitor properties (cannot be used with s3config). Exhibitor uses file system locks so you can specify a shared location so as to enable complete ensemble management. Default location is " + System.getProperty("user.dir"));
@@ -137,6 +153,7 @@ public class ExhibitorCLI
 
         Options s3Options = new Options();
         s3Options.addOption(null, S3_CREDENTIALS, true, "Optional credentials to use for s3backup or s3config. Argument is the path to an AWS credential properties file with two properties: " + PropertyBasedS3Credential.PROPERTY_S3_KEY_ID + " and " + PropertyBasedS3Credential.PROPERTY_S3_SECRET_KEY);
+        s3Options.addOption(null, S3_REGION, true, "Optional region for S3 calls (e.g. \"eu-west-1\"). Will be used to set the S3 client's endpoint.");
 
         generalOptions = new Options();
         generalOptions.addOption(null, TIMEOUT, true, "Connection timeout (ms) for ZK connections. Default is 30000.");
@@ -150,6 +167,8 @@ public class ExhibitorCLI
         generalOptions.addOption(SHORT_CONFIG_TYPE, CONFIG_TYPE, true, "Defines which configuration type you want to use. Choices are: \"file\", \"s3\", \"zookeeper\" or \"none\". Additional config will be required depending on which type you are using.");
         generalOptions.addOption(null, CONFIGCHECKMS, true, "Period (ms) to check for shared config updates. Default is: 30000");
         generalOptions.addOption(null, SERVO_INTEGRATION, true, "true/false (default is false). If enabled, ZooKeeper will be queried once a minute for its state via the 'mntr' four letter word (this requires ZooKeeper 3.4.x+). Servo will be used to publish this data via JMX.");
+        generalOptions.addOption(null, INITIAL_CONFIG_FILE, true, "Full path to a file that contains initial/default values for Exhibitor/ZooKeeper config values. The file is a standard property file. The property names are listed below. The file can specify some or all of the properties.");
+        generalOptions.addOption(null, PREFERENCES_PATH, true, "Certain values (such as Control Panel values) are stored in a preferences file. By default, Preferences.userRoot() is used. Use this option to specify a different file path.");
 
         Options aclOptions = new Options();
         aclOptions.addOption(null, ACL_ID, true, "Enable ACL for Exhibitor's internal ZooKeeper connection. This sets the ACL's ID.");
@@ -164,6 +183,7 @@ public class ExhibitorCLI
         addAll("Configuration Options for Type \"none\"", noneConfigOptions);
         addAll("Backup Options", backupOptions);
         addAll("Authorization Options", authOptions);
+        addAll("Deprecated Authorization Options", deprecatedAuthOptions);
         addAll("ACL Options", aclOptions);
         addAll(null, generalOptions);
     }
@@ -210,6 +230,17 @@ public class ExhibitorCLI
         for ( OptionSection section : sections )
         {
             formatter.printHelp(" ", "\n== " + section.sectionName + " ==", section.options, null);
+        }
+
+        System.out.println();
+        System.out.println("== Default Property Names ==");
+        for ( StringConfigs config : StringConfigs.values() )
+        {
+            System.out.println("\t" + PropertyBasedInstanceConfig.toName(config, ""));
+        }
+        for ( IntConfigs config : IntConfigs.values() )
+        {
+            System.out.println("\t" + PropertyBasedInstanceConfig.toName(config, ""));
         }
     }
 
